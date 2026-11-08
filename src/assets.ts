@@ -13,8 +13,10 @@ const STATIC = [
   'cloud_big', 'cloud_small', 'waterlily_A', 'waterlily_B', 'waterplant_A', 'waterplant_B',
   'mountain_A_grass_trees', 'mountain_B_grass_trees', 'mountain_C_grass_trees', 'hills_A_trees', 'hills_B_trees', 'hills_C_trees',
   'barrel', 'crate_A_big', 'crate_A_small', 'crate_B_small', 'sack', 'wheelbarrow', 'resource_lumber', 'resource_stone', 'flag',
-  'fence_wood_straight', 'pallet', 'bucket_water', 'axe_1handed',
+  'fence_wood_straight', 'pallet', 'bucket_water', 'axe_1handed', 'building_destroyed', 'building_barracks', 'building_tower_A',
+  'weaponrack', 'target', 'sword_1handed', 'shield_badge_color', 'shield_round_color',
 ] as const;
+const CHAR_PROPS = new Set(['axe_1handed', 'sword_1handed', 'shield_badge_color', 'shield_round_color']);
 export type StaticName = (typeof STATIC)[number];
 const CHARACTERS = ['rogue', 'rogue_hooded', 'knight', 'barbarian'] as const;
 export type CharName = (typeof CHARACTERS)[number];
@@ -56,7 +58,7 @@ export async function loadAssets(onProgress: (f: number) => void) {
       const m = o as THREE.Mesh;
       if (m.isMesh && !(m as THREE.SkinnedMesh).isSkinnedMesh) m.material = atlasMaterial;
     });
-  for (const n of STATIC) if (n !== 'axe_1handed') swap(models.get(n)!);
+  for (const n of STATIC) if (!CHAR_PROPS.has(n)) swap(models.get(n)!);
   villagerSkins = makeVillagerSkins();
 }
 

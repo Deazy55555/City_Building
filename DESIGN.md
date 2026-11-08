@@ -56,6 +56,15 @@ In the Space Age he builds a launch pad and **five rocket parts**. Each part tak
 When the rocket is finished, a countdown starts and the biggest army of the game attacks. His army holds them off, or General Sam does, until the countdown ends.
 Then the rocket lifts off, his civilization becomes **interplanetary**, and he sees his victory stats. The empire stays open so he can keep playing. A "Moon Colony" add-on could come later.
 
+### Phase 2 numbers (tuning)
+- First raid after 8 minutes of play, then every 7–9 minutes. Warning 45 seconds before. Raid size grows each wave (2, 4, 5, 6 …, max 14).
+- Raiders attack defenders and villagers near them, then buildings, then the Town Center. A raid that lasts over 100 seconds also brings Sam.
+- General Sam comes out when the Town Center drops to 30% health. He can't be hurt. Levels 1–5 (boss questions) make him faster and stronger and change his look.
+- Soldier: 40 food + 20 gold, math question. Scout: 60 food, reading question. Barracks: 120 wood + 40 stone. Watch Tower: 40 wood + 80 stone.
+- Broken buildings stop working until repaired (about 35% of their cost + a mixed question + villagers to do the work).
+- The bell hides villagers in the Town Center, where they heal. The town always keeps at least 3 villagers.
+- Fog of war: the area around the Town Center starts explored; villagers, soldiers and scouts uncover more.
+
 ## Parent screen (PIN)
 His accuracy by skill, a difficulty adjustment, timer speed, an optional daily play limit (off by default), and the read-aloud voice.
 
@@ -70,7 +79,7 @@ His accuracy by skill, a difficulty adjustment, timer speed, an optional daily p
 - Hosted on GitHub Pages.
 
 ## Build phases
-1. **Playable Stone Age:** map, villagers gathering, hunting, TC, houses, farms, storehouse, timers, the question engine, and the resources-per-attempt rule. Save and load.
-2. Attacks, towers, soldiers, General Sam, damage and repairs, fog of war and scouts.
+1. ✅ **Playable Stone Age:** map, villagers gathering, hunting, TC, houses, farms, storehouse, timers, the question engine, and the resources-per-attempt rule. Save and load.
+2. ✅ Attacks, towers, soldiers, General Sam, damage and repairs, fog of war and scouts.
 3. Ages 2–4, science research, advancing ages, and the content bank.
 4. Ages 5–8, the rocket finale, the parent screen, second settlements and trade, sound and polish.

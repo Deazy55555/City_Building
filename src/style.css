@@ -177,3 +177,35 @@ button { font-family: inherit; cursor: pointer; }
 .loading p { font-size: 20px; font-weight: 700; }
 .load-bar { width: 320px; height: 22px; border: 4px solid #8a6a3f; border-radius: 14px; background: #fff8ea; overflow: hidden; }
 .load-bar div { height: 100%; width: 0; background: linear-gradient(#6fd17f, #3aa655); transition: width 0.2s; }
+
+/* ---------- Phase 2: raids, bell, minimap, Sam ---------- */
+.raid-banner {
+  position: absolute; top: 66px; left: 10px; display: none; font-weight: 900; font-size: 16px; padding: 6px 14px; border-radius: 14px;
+  border: 3px solid #8a6a3f; background: #fff8eaee; color: #2b2118; box-shadow: 0 4px 10px #0003; pointer-events: none;
+}
+.raid-banner.warn { border-color: #d98c1e; background: linear-gradient(#fff2c8, #ffd98a); font-size: 19px; animation: pulse 1s infinite; }
+.raid-banner.active { border-color: #a83a36; background: linear-gradient(#ffb3a8, #f07a6e); color: #fff; font-size: 20px; text-shadow: 0 2px 0 #7a2420; animation: pulse 0.8s infinite; }
+.bell-btn {
+  position: absolute; top: 110px; left: 10px; display: none; font-size: 17px; font-weight: 900; padding: 10px 14px; border-radius: 14px;
+  border: 3px solid #c98a1e; background: linear-gradient(#fff3c4, #ffd778); box-shadow: 0 3px 0 #94661a; color: #2b2118;
+}
+.bell-btn.ringing { background: linear-gradient(#d6f5d9, #9fe0a8); border-color: #2a8a44; box-shadow: 0 3px 0 #24733a; }
+.edge-arrow {
+  position: absolute; display: none; width: 54px; height: 54px; margin: -27px 0 0 -27px; border-radius: 50%; align-items: center; justify-content: center;
+  font-size: 26px; background: radial-gradient(#ff6b5e, #c0392b); border: 3px solid #fff; box-shadow: 0 0 0 4px #c0392b88, 0 6px 14px #0005;
+  pointer-events: none; animation: pulse 0.8s infinite;
+}
+.edge-arrow::after {
+  content: ''; position: absolute; left: 50%; top: 50%; width: 0; height: 0; border: 12px solid transparent; border-left: 18px solid #c0392b;
+  transform: rotate(var(--rot)) translate(34px, 0) translate(-50%, -50%); transform-origin: 0 0;
+}
+.minimap {
+  position: absolute; right: 10px; bottom: 10px; width: 190px; height: 190px; border: 4px solid #8a6a3f; border-radius: 14px;
+  box-shadow: 0 4px 0 #5e4527, 0 8px 16px #0004; background: #cdd6e4; cursor: pointer; image-rendering: pixelated;
+}
+@media (max-width: 1300px) { .panel { left: calc(50% - 100px); width: min(760px, calc(100% - 230px)); } }
+.sam-card { margin-top: 12px; padding: 10px 12px; border: 3px solid #d39b14; border-radius: 14px; background: linear-gradient(#fff9e3, #ffefb8); }
+.sam-title { font-weight: 900; font-size: 18px; }
+.sam-level { background: #d39b14; color: #fff; border-radius: 999px; padding: 1px 10px; font-size: 14px; margin-left: 6px; }
+.act.boss { margin-top: 8px; border-color: #d39b14; background: linear-gradient(#fff6d3, #ffe18a); box-shadow: 0 3px 0 #a87a0e; }
+.act.boss.cant { border-color: #b9b0a0; background: #eee8dc; box-shadow: 0 3px 0 #a39a88; }

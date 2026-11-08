@@ -198,13 +198,13 @@ function scienceQ(level: number): Question {
   return mcFrom(item, 'science', true);
 }
 
-export function makeQuestion(subject: Subject, skills: Record<Skill, SkillStats>): Question {
+export function makeQuestion(subject: Subject, skills: Record<Skill, SkillStats>, forceLevel?: number): Question {
   let s: Skill;
   if (subject === 'math') s = 'math';
   else if (subject === 'science') s = 'science';
   else if (subject === 'reading') s = Math.random() < 0.3 ? 'spelling' : 'reading';
   else s = pick<Skill>(['math', 'reading', 'spelling', 'science']);
-  const lv = skills[s].level;
+  const lv = forceLevel ?? skills[s].level;
   if (s === 'math') return mathQ(lv);
   if (s === 'reading') return readingQ(lv);
   if (s === 'spelling') return spellingQ(lv);

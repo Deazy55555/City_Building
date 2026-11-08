@@ -1,4 +1,8 @@
-import { BUILD_MENU, BUILDINGS, GOALS, RES, RES_ICON, RES_NAME, RESEARCH, VILLAGER_COST, VILLAGER_TIME, costText, type Cost, type Res } from './data';
+import {
+  BUILD_MENU, BUILDINGS, GOALS, RES, RES_ICON, RES_NAME, RESEARCH, SAM_MAX_LEVEL, SCOUT_COST, SCOUT_TIME, SOLDIER_COST, SOLDIER_TIME,
+  VILLAGER_COST, VILLAGER_TIME, costText, repairCost, samUpgradeCost, type Cost, type Res,
+} from './data';
+import { Minimap } from './minimap';
 import type { Game, GameUI } from './game';
 import type { Question } from './questions';
 import { say, englishVoices, setVoice, currentVoiceName } from './speech';
@@ -38,13 +42,20 @@ export class UI implements GameUI {
   tip = h('div', 'tip');
   toasts = h('div', 'toasts');
   idleBtn = h('button', 'idle-btn');
+  raidBanner = h('div', 'raid-banner');
+  bellBtn = h('button', 'bell-btn');
+  edgeArrow = h('div', 'edge-arrow', '⚔️');
+  minimap: Minimap;
   private dyn: (() => void)[] = [];
+  private selKey = '';
   private mouse = { x: 0, y: 0 };
   private idleIdx = 0;
 
   constructor(private game: Game, container: HTMLElement) {
     this.root = container;
-    container.append(this.top, this.goals, this.panel, this.tip, this.toasts, this.idleBtn);
+    container.append(this.top, this.goals, this.panel, this.tip, this.toasts, this.idleBtn, this.raidBanner, this.bellBtn, this.edgeArrow);
+    this.minimap = new Minimap(game, container);
+    this.bellBtn.addEventListener('click', () => this.game.combat.ringBell(!this.game.combat.bell));
     this.buildTop();
     this.idleBtn.addEventListener('click', () => this.nextIdle());
     window.addEventListener('mousemove', (e) => (this.mouse = { x: e.clientX, y: e.clientY }));
@@ -94,8 +105,14 @@ export class UI implements GameUI {
       el.parentElement!.classList.toggle('empty', r === 'food' && g.res[r] <= 0);
       el.parentElement!.title = `${RES_NAME[r]}: ${Math.floor(g.res[r])} of ${cap} storage`;
     }
-    this.popEl.textContent = `${g.villagers.size}/${g.popCap()}`;
-    const idle = [...g.villagers.values()].filter((v) => v.task.k === 'idle');
+    this.popEl.textContent = `${g.popUsed()}/${g.popCap()}`;
+    this.raidTick();
+    this.minimap.tick();
+    // refresh the panel when the selected building gets damaged, broken or fixed
+    const sb = g.selectedBuilding !== null ? g.buildings.get(g.selectedBuilding) : undefined;
+    const key = sb ? `${sb.id}:${sb.hp < BUILDINGS[sb.type].hp}:${sb.broken}:${sb.repairing}:${sb.built}` : '';
+    if (key !== this.selKey) { this.selKey = key; if (sb) this.refreshSelection(); }
+    const idle = [...g.villagers.values()].filter((v) => v.task.k === 'idle' && !v.dying && !v.hidden);
     this.idleBtn.style.display = idle.length ? 'block' : 'none';
     this.idleBtn.textContent = `😴 ${idle.length} idle villager${idle.length === 1 ? '' : 's'}`;
     if (g.hoverText && !document.querySelector('.modal')) {
@@ -108,11 +125,91 @@ export class UI implements GameUI {
   }
 
   private nextIdle() {
-    const idle = [...this.game.villagers.values()].filter((v) => v.task.k === 'idle');
+    const idle = [...this.game.villagers.values()].filter((v) => v.task.k === 'idle' && !v.dying && !v.hidden);
     if (!idle.length) return;
     const v = idle[this.idleIdx++ % idle.length];
     this.game.setSelected([v]);
     this.game.rts.focus(v.pos.x, v.pos.z);
+  }
+
+  // ---------------- raids ----------------
+  private raidTick() {
+    const c = this.game.combat;
+    const t = c.timeToRaid();
+    const mmss = (x: number) => `${Math.floor(x / 60)}:${String(Math.floor(x % 60)).padStart(2, '0')}`;
+    if (c.raidActive) {
+      const n = c.raiders().length;
+      this.raidBanner.style.display = 'block';
+      this.raidBanner.className = 'raid-banner active';
+      this.raidBanner.textContent = `⚔️ Raiders are attacking! ${n} left`;
+    } else if (c.warning()) {
+      this.raidBanner.style.display = 'block';
+      this.raidBanner.className = 'raid-banner warn';
+      this.raidBanner.textContent = `📯 Raiders coming in ${mmss(t)}! Get ready!`;
+    } else if (this.game.playTime > 60) {
+      this.raidBanner.style.display = 'block';
+      this.raidBanner.className = 'raid-banner calm';
+      this.raidBanner.textContent = `⚔️ Next raid in ${mmss(t)}`;
+    } else this.raidBanner.style.display = 'none';
+    const showBell = c.raidActive || c.warning() || c.bell;
+    this.bellBtn.style.display = showBell ? 'block' : 'none';
+    this.bellBtn.textContent = c.bell ? '🔔 All clear: back to work' : '🔔 Ring the bell (hide villagers)';
+    this.bellBtn.classList.toggle('ringing', c.bell);
+    // arrow at the screen edge pointing to raiders that are off screen
+    const center = c.raidCenter();
+    if (center && !document.querySelector('.modal')) {
+      const p = center.clone().setY(center.y + 0.5).project(this.game.rts.cam);
+      const behind = p.z > 1;
+      const off = behind || Math.abs(p.x) > 0.95 || Math.abs(p.y) > 0.95;
+      if (off) {
+        let x = p.x, y = p.y;
+        if (behind) { x = -x; y = -y; }
+        const m = Math.max(Math.abs(x), Math.abs(y)) || 1;
+        x = (x / m) * 0.9; y = (y / m) * 0.82;
+        const W = this.root.clientWidth, H = this.root.clientHeight;
+        this.edgeArrow.style.display = 'flex';
+        this.edgeArrow.style.left = `${((x + 1) / 2) * W}px`;
+        this.edgeArrow.style.top = `${((1 - y) / 2) * H}px`;
+        this.edgeArrow.style.setProperty('--rot', `${Math.atan2(-y, x)}rad`);
+      } else this.edgeArrow.style.display = 'none';
+    } else this.edgeArrow.style.display = 'none';
+  }
+
+  private unitPanel() {
+    const g = this.game;
+    const us = g.selectedUnits();
+    const soldiers = us.filter((u) => u.kind === 'soldier'), scouts = us.filter((u) => u.kind === 'scout');
+    const head = h('div', 'panel-head');
+    const parts = [];
+    if (soldiers.length) parts.push(soldiers.length === 1 ? '🛡️ Soldier' : `🛡️ ${soldiers.length} soldiers`);
+    if (scouts.length) parts.push(scouts.length === 1 ? '🧭 Scout' : `🧭 ${scouts.length} scouts`);
+    head.append(h('span', '', parts.join(' + ')));
+    const close = h('button', 'x-btn', '✖');
+    close.addEventListener('click', () => g.setSelected([]));
+    head.append(close);
+    this.panel.append(head);
+    if (soldiers.length) this.panel.append(speakable('Click a place to send soldiers there. They fight raiders that come close. Click a raider to attack it.'));
+    if (scouts.length) this.panel.append(speakable('Scouts walk into the clouds to find new land, trees, rocks and gold.'));
+    const row = h('div', 'act-row');
+    if (scouts.length) {
+      const b = h('button', 'act', '<div class="act-label">🧭 Explore on your own</div><div class="act-sub">The scout picks where to go</div>');
+      b.addEventListener('click', () => { for (const u of scouts) { u.order = 'explore'; u.path = []; } g.ui.toast('🧭 Off to explore!'); });
+      row.append(b);
+    }
+    if (soldiers.length) {
+      const b = h('button', 'act', '<div class="act-label">🏰 Guard the Town Center</div><div class="act-sub">Soldiers stand by the castle</div>');
+      b.addEventListener('click', () => {
+        const tc = g.townCenter();
+        if (!tc) return;
+        soldiers.forEach((u, k) => {
+          const a = (k / soldiers.length) * Math.PI * 2;
+          u.order = 'move';
+          g.pathTo(u, Math.round(tc.i + 1 + Math.cos(a) * 3), Math.round(tc.j + 1 + Math.sin(a) * 3), true);
+        });
+      });
+      row.append(b);
+    }
+    this.panel.append(row);
   }
 
   // ---------------- selection panel ----------------
@@ -123,6 +220,7 @@ export class UI implements GameUI {
     const vs = g.selectedVillagers();
     const b = g.selectedBuilding !== null ? g.buildings.get(g.selectedBuilding) : undefined;
     if (vs.length) this.villagerPanel(vs.length);
+    else if (g.selectedUnits().length) this.unitPanel();
     else if (b) this.buildingPanel(b.id);
     else {
       this.panel.append(h('div', 'panel-hint', 'Click a villager to give them a job. Click the 🏰 Town Center to train more villagers.'));
@@ -175,6 +273,31 @@ export class UI implements GameUI {
       this.panel.append(h('div', 'panel-hint', 'Pick villagers and click this building to help build it faster.'));
       return;
     }
+    const maxHp = def.hp;
+    if (b.hp < maxHp) {
+      const bar = this.progressBar(() => b.hp / maxHp, () => `${b.broken ? '💥 Broken' : '❤️ Health'} ${Math.ceil(b.hp)} / ${maxHp}`);
+      this.panel.append(bar);
+      if (b.repairing) {
+        this.panel.append(h('div', 'panel-hint', '🔨 Repairs are on! Pick villagers and click this building to help fix it faster.'));
+      } else {
+        this.panel.append(h('div', 'section', b.broken ? 'This building is broken and stopped working.' : 'This building is damaged.'));
+        const row = h('div', 'act-row');
+        row.append(this.costButton('🔨 Repair', repairCost(b.type), 'mixed', () => g.startRepair(b), '<br>Then villagers fix it'));
+        this.panel.append(row);
+      }
+      if (b.broken) return;
+    }
+    if (b.type === 'barracks') {
+      this.panel.append(h('div', 'section', 'Train a soldier <span class="muted">(answer a Math question)</span>'));
+      const row = h('div', 'act-row');
+      row.append(this.costButton('🛡️ Soldier', SOLDIER_COST, 'math', () => g.combat.trainSoldier(b), '<br>Fights raiders'));
+      this.panel.append(row);
+      this.panel.append(this.queueView(b.id));
+      const n = h('div', 'panel-hint');
+      this.dyn.push(() => { n.textContent = `You have ${g.combat.alive('soldier').length} soldier(s).`; });
+      this.panel.append(n);
+    }
+    if (b.type === 'tower') this.panel.append(h('div', 'panel-hint', '🏹 Towers shoot arrows at raiders all by themselves. Build them near your town.'));
     if (b.type === 'farm') {
       const st = h('div', 'panel-hint');
       this.dyn.push(() => { st.textContent = b.farmer !== null && g.villagers.has(b.farmer) ? '👩‍🌾 A villager is farming here.' : '🌾 Nobody is farming here. Pick a villager and click the farm.'; });
@@ -184,13 +307,21 @@ export class UI implements GameUI {
       this.panel.append(h('div', 'section', 'Train a villager <span class="muted">(answer a Reading question)</span>'));
       const row = h('div', 'act-row');
       for (const r of RES) row.append(this.costButton(`${RES_ICON[r]} ${JOB_LABEL[r]} worker`, VILLAGER_COST, 'reading', () => g.trainVillager(r)));
+      row.append(this.costButton('🧭 Scout', SCOUT_COST, 'reading', () => g.combat.trainScout(b), '<br>Explores the clouds'));
       this.panel.append(row);
-      const q = h('div', 'queue');
-      this.dyn.push(() => {
-        if (!b.queue.length) { q.innerHTML = ''; return; }
-        q.innerHTML = b.queue.map((it, k) => `<span class="q-item">${RES_ICON[it.job ?? 'food']}${k === 0 ? ` <span class="mini-bar"><span style="width:${(it.t / VILLAGER_TIME) * 100}%"></span></span>` : ''}</span>`).join('');
-      });
-      this.panel.append(q);
+      this.panel.append(this.queueView(b.id));
+
+      // General Sam
+      const sam = h('div', 'sam-card');
+      const L = g.combat.samLevel;
+      sam.innerHTML = `<div class="sam-title">🛡️ General Sam <span class="sam-level">Level ${L}${L >= SAM_MAX_LEVEL ? ' (max)' : ''}</span></div>
+        <div class="muted">He lives in the Town Center. If raiders hurt it badly, he comes out and saves the day!</div>`;
+      if (L < SAM_MAX_LEVEL) {
+        const up = this.costButton(`⭐ Make Sam stronger (level ${L + 1})`, samUpgradeCost(L), 'mixed', () => g.combat.upgradeSam(), ' · ⭐ Boss question');
+        up.classList.add('boss');
+        sam.append(up);
+      }
+      this.panel.append(sam);
 
       this.panel.append(h('div', 'section', 'Research <span class="muted">(answer a Science question)</span>'));
       const rrow = h('div', 'act-row');
@@ -210,6 +341,21 @@ export class UI implements GameUI {
       this.panel.append(rrow);
       this.panel.append(h('div', 'locked', '🔒 Bronze Age — coming in a future update'));
     }
+  }
+
+  private queueView(id: number) {
+    const g = this.game;
+    const q = h('div', 'queue');
+    this.dyn.push(() => {
+      const b = g.buildings.get(id);
+      if (!b || !b.queue.length) { q.innerHTML = ''; return; }
+      q.innerHTML = b.queue.map((it, k) => {
+        const icon = it.kind === 'soldier' ? '🛡️' : it.kind === 'scout' ? '🧭' : RES_ICON[it.job ?? 'food'];
+        const total = it.kind === 'soldier' ? SOLDIER_TIME : it.kind === 'scout' ? SCOUT_TIME : VILLAGER_TIME;
+        return `<span class="q-item">${icon}${k === 0 ? ` <span class="mini-bar"><span style="width:${(it.t / total) * 100}%"></span></span>` : ''}</span>`;
+      }).join('');
+    });
+    return q;
   }
 
   private progressBar(get: () => number, label: () => string) {
@@ -477,6 +623,9 @@ export class UI implements GameUI {
         'Click the Town Center to train new villagers.',
         'You answer a question to build or train. Every try uses up resources, so think before you answer!',
         'Villagers eat food. Keep gathering food so they stay strong.',
+        'Raiders will attack sometimes. Build a Barracks to train soldiers, and Watch Towers that shoot arrows.',
+        'Ring the bell to hide your villagers in the Town Center. If the raiders hurt the Town Center, General Sam comes to save the day!',
+        'Train a scout to explore the clouds and find more trees, rocks and gold. Use the little map to jump around.',
         'Scroll to zoom. Use W A S D, the arrow keys, or drag with the right mouse button to look around. Q and E turn the view.',
       ];
       const list = h('ul', 'help');

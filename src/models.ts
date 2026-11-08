@@ -222,8 +222,10 @@ const LOOKS: Record<BType, BuildingLook[]> = {
   house: [{ name: 'building_home_A', scale: 2.0 }, { name: 'building_home_B', scale: 1.6 }],
   farm: [{ name: 'building_grain', scale: 1.42 }],
   storehouse: [{ name: 'building_market', scale: 1.05 }],
+  barracks: [{ name: 'building_barracks', scale: 1.25 }],
+  tower: [{ name: 'building_tower_A', scale: 1.5 }],
 };
-const SIZE: Record<BType, number> = { towncenter: 3, house: 2, farm: 3, storehouse: 2 };
+const SIZE: Record<BType, number> = { towncenter: 3, house: 2, farm: 3, storehouse: 2, barracks: 2, tower: 2 };
 
 function props(type: BType, rnd: () => number) {
   const g = new THREE.Group();
@@ -241,6 +243,10 @@ function props(type: BType, rnd: () => number) {
   } else if (type === 'storehouse') {
     put('resource_lumber', -0.6, 0.75, 1.1, 0); put('resource_stone', 0.6, 0.75, 1.1, 0);
     put('barrel', 0.8, -0.65, 1.3);
+  } else if (type === 'barracks') {
+    put('weaponrack', 0.8, 0.8, 1.3, 0); put('target', -0.8, 0.85, 1.3, 0);
+  } else if (type === 'tower') {
+    put('barrel', 0.7, 0.7, 1.1); put('crate_A_small', -0.7, 0.75, 1.1);
   } else if (type === 'house') {
     if (rnd() < 0.6) put(rnd() < 0.5 ? 'barrel' : 'crate_A_small', 0.75, 0.75, 1.2);
   }
@@ -295,10 +301,21 @@ export function makeBuilding(type: BType, rnd: () => number = Math.random) {
     stages.add(sc);
   }
   wrap.add(stages);
+  // rubble, shown when raiders break the building
+  const rubble = model('building_destroyed');
+  rubble.scale.setScalar(size * 0.62);
+  rubble.visible = false;
+  wrap.add(rubble);
+  wrap.userData.rubble = rubble;
   wrap.userData.main = main;
   wrap.userData.stages = stages;
   wrap.userData.type = type;
   return wrap;
+}
+
+export function setBroken(wrap: THREE.Group, broken: boolean) {
+  (wrap.userData.main as THREE.Object3D).visible = !broken;
+  (wrap.userData.rubble as THREE.Object3D).visible = broken;
 }
 
 export function setBuildProgress(wrap: THREE.Group, progress: number, built: boolean) {

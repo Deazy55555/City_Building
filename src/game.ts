@@ -1,15 +1,17 @@
 import * as THREE from 'three';
 import {
   BUILDINGS, FOOD_UPKEEP_EVERY, GATHER_RATE, GOALS, MAX_POP, RES, RES_ICON, RESEARCH, VILLAGER_COST, VILLAGER_SPEED,
-  VILLAGER_TIME, BASE_CARRY, costText, type BType, type Cost, type Res, type Subject,
+  VILLAGER_TIME, BASE_CARRY, costText, repairCost, type BType, type Cost, type Res, type Subject,
 } from './data';
 import {
   animateDeer, makeBerryBush, makeBuilding, makeCarcass, makeDeer, makeGhost, makeRock, makeStump,
-  makeTree, mat, setBuildProgress, setGhostValid,
+  makeTree, mat, setBroken, setBuildProgress, setGhostValid,
 } from './models';
 import { ChunkMerger, windMaterial } from './bake';
 import { atlasMaterial, makeBundle, makeCharacter, makeTool, playAnim, type Character, type ToolName } from './assets';
 import { FX, loadQuality } from './fx';
+import { Combat, type Unit } from './combat';
+import { Fog } from './fog';
 import { U } from './uniforms';
 
 type VillagerAnim = 'idle' | 'walk' | 'run' | 'chop' | 'mine' | 'pick' | 'build';
@@ -29,8 +31,11 @@ export interface ResNode {
 }
 export interface Building {
   id: number; type: BType; i: number; j: number; size: number; built: boolean; progress: number; hp: number;
-  mesh: THREE.Group; queue: { job: Res | null; t: number }[]; research: { id: string; t: number } | null; farmer: number | null;
+  mesh: THREE.Group; queue: { job: Res | null; t: number; kind?: 'villager' | 'soldier' | 'scout' }[]; research: { id: string; t: number } | null; farmer: number | null;
+  broken: boolean; repairing: boolean;
 }
+/** Anything that walks along a path */
+export interface Walker { pos: THREE.Vector3; path: THREE.Vector3[]; mesh: THREE.Object3D; offset: THREE.Vector2 }
 export interface Animal { id: number; pos: THREE.Vector3; target: THREE.Vector3; home: THREE.Vector3; mesh: THREE.Group; wait: number; t: number }
 export type Task =
   | { k: 'idle' }
@@ -39,15 +44,21 @@ export type Task =
   | { k: 'farm'; b: number; stage: 'to' | 'work' | 'drop' }
   | { k: 'hunt'; a: number; repath: number }
   | { k: 'build'; b: number }
-  | { k: 'dropoff'; b: number };
+  | { k: 'dropoff'; b: number }
+  | { k: 'hide' }
+  | { k: 'repair'; b: number };
 export interface Villager {
   id: number; pos: THREE.Vector3; mesh: THREE.Group; ring: THREE.Mesh; path: THREE.Vector3[]; task: Task;
   carry: { res: Res | null; amt: number }; job: Res | null; selected: boolean; anim: VillagerAnim; t: number;
   ch: Character; tool: ToolName | null; toolObj: THREE.Object3D | null; bundle: THREE.Object3D | null; bundleRes: Res | null; cheer: number; fxT: number;
   offset: THREE.Vector2; farmSpot: THREE.Vector3 | null; stuck: number;
+  hp: number; maxHp: number; hidden: boolean; dying: number;
 }
 
-export interface Stats { trained: number; hunted: number; collected: Record<Res, number>; answered: number; correct: number }
+export interface Stats {
+  trained: number; hunted: number; collected: Record<Res, number>; answered: number; correct: number;
+  soldiers?: number; scouts?: number; raidsDefended?: number;
+}
 
 export interface GameUI {
   ask(q: Question, title: string, cost: Cost): Promise<boolean>;
@@ -59,6 +70,7 @@ export interface GameUI {
 const SAVE_KEY = 'citybuilding.save.v1';
 const VILLAGER_NAMES_ACTION: Record<string, string> = {
   idle: 'Waiting for a job', move: 'Walking', gather: 'Gathering', farm: 'Farming', hunt: 'Hunting', build: 'Building', dropoff: 'Dropping off',
+  hide: 'Hiding in the Town Center', repair: 'Repairing',
 };
 
 export class Game {
@@ -70,6 +82,9 @@ export class Game {
   grid = new Grid();
   root = new THREE.Group(); // everything that belongs to the current game
   trees!: ChunkMerger;
+  combat: Combat;
+  fog = new Fog();
+  private revealT = 0;
   fx!: FX;
   hemi!: THREE.HemisphereLight;
   falling: { obj: THREE.Object3D; t: number; axis: THREE.Vector3 }[] = [];
@@ -137,6 +152,8 @@ export class Game {
     this.scene.add(this.root);
     this.trees = new ChunkMerger(this.root, windMaterial(atlasMaterial, U.time));
     this.fx = new FX(this.renderer, this.scene, this.rts.cam, this.sun, this.hemi, loadQuality());
+    this.combat = new Combat(this);
+    this.scene.add(this.fog.mesh);
 
     const outlineGeo = new THREE.BufferGeometry().setFromPoints([
       new THREE.Vector3(-0.5, 0, -0.5), new THREE.Vector3(0.5, 0, -0.5), new THREE.Vector3(0.5, 0, 0.5), new THREE.Vector3(-0.5, 0, 0.5),
@@ -166,6 +183,8 @@ export class Game {
 
   // ======================= world setup =======================
   private clearWorld() {
+    this.combat.reset();
+    this.fog.reset();
     this.trees.clear();
     this.root.clear();
     this.nodes.clear(); this.nodeAt.clear(); this.buildings.clear(); this.villagers.clear(); this.animals.clear();
@@ -226,6 +245,7 @@ export class Game {
     const rnd = mulberry32(seed);
     const c = MAP / 2;
     this.addBuilding('towncenter', c - 1, c - 1, true);
+    this.fog.reveal(0.5, 0.5, 12);
     this.generateResources(rnd);
     for (let k = 0; k < 3; k++) this.spawnVillagerAtTC(null);
     this.rts.focus(0.5, 2.5);
@@ -351,7 +371,8 @@ export class Game {
     for (let jj = j; jj < j + def.size; jj++) for (let ii = i; ii < i + def.size; ii++) h = Math.max(h, this.terrain.heightAt(tileToWorld(ii), tileToWorld(jj)));
     mesh.position.set(cx, h, cz);
     this.root.add(mesh);
-    const b: Building = { id: id ?? this.nextId++, type, i, j, size: def.size, built, progress: built ? 1 : 0, hp: def.hp, mesh, queue: [], research: null, farmer: null };
+    const b: Building = { id: id ?? this.nextId++, type, i, j, size: def.size, built, progress: built ? 1 : 0, hp: def.hp, mesh, queue: [], research: null, farmer: null, broken: false, repairing: false };
+    this.fog.reveal(cx, cz, def.size + 4);
     this.buildings.set(b.id, b);
     if (def.blocks) for (let jj = j; jj < j + def.size; jj++) for (let ii = i; ii < i + def.size; ii++) this.grid.set(ii, jj, true);
     // clear stumps under the building
@@ -418,6 +439,7 @@ export class Game {
       carry: { res: null, amt: 0 }, job, selected: false, anim: 'idle', t: Math.random() * 10,
       offset: new THREE.Vector2((Math.random() - 0.5) * 0.4, (Math.random() - 0.5) * 0.4), farmSpot: null, stuck: 0,
       ch, tool: null, toolObj: null, bundle: null, bundleRes: null, cheer: 0, fxT: Math.random(),
+      hp: 25, maxHp: 25, hidden: false, dying: 0,
     };
     this.villagers.set(v.id, v);
     if (job) this.autoJob(v, job);
@@ -429,24 +451,28 @@ export class Game {
     if (!tc) return null;
     const ring = this.grid.ringAround(tc.i, tc.j, tc.size, tc.i + 1, tc.j + 4);
     const spot = ring[Math.floor(Math.random() * Math.min(ring.length, 5))] ?? [tc.i, tc.j + 3];
-    return this.spawnVillager(tileToWorld(spot[0]), tileToWorld(spot[1]), job);
+    const v = this.spawnVillager(tileToWorld(spot[0]), tileToWorld(spot[1]), job);
+    if (this.combat.bell) this.hideVillager(v);
+    return v;
   }
 
   // ======================= economy =======================
   storageCap() {
     let cap = 0;
-    for (const b of this.buildings.values()) if (b.built) cap += BUILDINGS[b.type].storage ?? 0;
+    for (const b of this.buildings.values()) if (b.built && !b.broken) cap += BUILDINGS[b.type].storage ?? 0;
     return cap;
   }
   popCap() {
     let cap = 0;
-    for (const b of this.buildings.values()) if (b.built) cap += BUILDINGS[b.type].pop ?? 0;
+    for (const b of this.buildings.values()) if (b.built && (!b.broken || b.type === 'towncenter')) cap += BUILDINGS[b.type].pop ?? 0;
     return Math.min(MAX_POP, cap);
   }
   popUsed() {
     let q = 0;
     for (const b of this.buildings.values()) q += b.queue.length;
-    return this.villagers.size + q;
+    let units = 0;
+    for (const u of this.combat.units.values()) if (!u.dying && (u.kind === 'soldier' || u.kind === 'scout')) units++;
+    return this.liveVillagers() + units + q;
   }
   canAfford(c: Cost) {
     return RES.every((r) => (c[r] ?? 0) <= this.res[r]);
@@ -466,13 +492,13 @@ export class Game {
    * The core rule: resources are used up the moment a question opens, right or wrong.
    * Returns true if he answered correctly.
    */
-  async tryWithQuestion(subject: Subject, title: string, cost: Cost): Promise<boolean> {
+  async tryWithQuestion(subject: Subject, title: string, cost: Cost, forceLevel?: number): Promise<boolean> {
     if (!this.canAfford(cost)) {
       this.ui.toast(`You need ${this.missing(cost)} first. Go gather some!`, true);
       return false;
     }
     this.spend(cost);
-    const q = makeQuestion(subject, this.skills);
+    const q = makeQuestion(subject, this.skills, forceLevel);
     this.paused = true;
     let ok = false;
     try {
@@ -577,17 +603,26 @@ export class Game {
 
   // ======================= commands =======================
   selectedVillagers() {
-    return [...this.villagers.values()].filter((v) => v.selected);
+    return [...this.villagers.values()].filter((v) => v.selected && !v.dying && !v.hidden);
   }
 
-  setSelected(vs: Villager[], add = false) {
-    if (!add) for (const v of this.villagers.values()) v.selected = false;
+  selectedUnits() {
+    return [...this.combat.units.values()].filter((u) => u.selected && !u.dying);
+  }
+
+  setSelected(vs: Villager[], add = false, units: Unit[] = []) {
+    if (!add) {
+      for (const v of this.villagers.values()) v.selected = false;
+      for (const u of this.combat.units.values()) u.selected = false;
+    }
     for (const v of vs) v.selected = true;
-    if (vs.length) this.selectedBuilding = null;
+    for (const u of units) u.selected = true;
+    if (vs.length || units.length) this.selectedBuilding = null;
     this.ui.refreshSelection();
   }
 
   selectBuilding(b: Building | null) {
+    for (const u of this.combat.units.values()) u.selected = false;
     for (const v of this.villagers.values()) v.selected = false;
     this.selectedBuilding = b ? b.id : null;
     this.ui.refreshSelection();
@@ -635,8 +670,25 @@ export class Game {
   /** Called on whatever the player clicked while villagers are selected */
   commandTarget(target: Target, point: THREE.Vector3) {
     const vs = this.selectedVillagers();
-    if (!vs.length) return;
-    if (target.kind === 'node') {
+    const us = this.selectedUnits();
+    // soldiers attack raiders; soldiers and scouts walk where you click
+    us.forEach((u, k) => {
+      if (target.kind === 'unit' && target.unit.kind === 'raider' && u.kind === 'soldier') {
+        u.order = 'attack';
+        u.target = { k: 'unit', id: target.unit.id };
+        u.path = [];
+      } else {
+        const a = k * 2.4, r = k === 0 ? 0 : 0.6 + 0.35 * Math.sqrt(k);
+        u.order = 'move';
+        u.target = null;
+        this.pathTo(u, worldToTile(point.x + Math.cos(a) * r), worldToTile(point.z + Math.sin(a) * r), true);
+      }
+    });
+    if (!vs.length) { if (us.length) this.ui.refreshSelection(); return; }
+    if (target.kind === 'unit') {
+      // villagers don't fight: they run toward the click point
+      vs.forEach((v) => this.commandMove(v, point.x, point.z));
+    } else if (target.kind === 'node') {
       for (const v of vs) this.commandGather(v, target.node);
       if (target.node.kind === 'tree') this.markGoal('gather_wood');
     } else if (target.kind === 'animal') {
@@ -644,6 +696,8 @@ export class Game {
     } else if (target.kind === 'building') {
       const b = target.building;
       if (!b.built) for (const v of vs) this.commandBuild(v, b);
+      else if (b.repairing) for (const v of vs) this.commandRepair(v, b);
+      else if (b.broken) { this.selectBuilding(b); this.ui.toast('🔨 This building is broken. Press Repair to fix it.', true); return; }
       else if (b.type === 'farm') {
         const [first, ...rest] = vs;
         if (!this.commandFarm(first, b)) this.ui.toast('Someone already works this farm. Build another one!');
@@ -701,7 +755,7 @@ export class Game {
   nearestDropsite(p: THREE.Vector3) {
     let best: Building | null = null, bd = Infinity;
     for (const b of this.buildings.values()) {
-      if (!b.built || !BUILDINGS[b.type].dropsite) continue;
+      if (!b.built || b.broken || !BUILDINGS[b.type].dropsite) continue;
       const d = this.rectDist(p, b.i, b.j, b.size);
       if (d < bd) { bd = d; best = b; }
     }
@@ -716,13 +770,13 @@ export class Game {
     return Math.hypot(dx, dz);
   }
 
-  private startTile(v: Villager): [number, number] | null {
+  private startTile(v: Walker): [number, number] | null {
     const i = worldToTile(v.pos.x), j = worldToTile(v.pos.z);
     if (this.grid.walkable(i, j)) return [i, j];
     return this.grid.nearestWalkable(i, j);
   }
 
-  private setPath(v: Villager, tiles: [number, number][], from: [number, number], useOffset = false) {
+  private setPath(v: Walker, tiles: [number, number][], from: [number, number], useOffset = false) {
     // already on the target tile: just step to its center so we end up next to the target
     if (!tiles.length) tiles = [from];
     v.path = tiles.map(([i, j], k) => {
@@ -731,7 +785,7 @@ export class Game {
     });
   }
 
-  pathTo(v: Villager, ti: number, tj: number, useOffset = false) {
+  pathTo(v: Walker, ti: number, tj: number, useOffset = false) {
     const s = this.startTile(v);
     const t = this.grid.nearestWalkable(ti, tj);
     if (!s || !t) return false;
@@ -741,7 +795,7 @@ export class Game {
     return true;
   }
 
-  pathToRect(v: Villager, i: number, j: number, size: number) {
+  pathToRect(v: Walker, i: number, j: number, size: number) {
     const s = this.startTile(v);
     if (!s) return false;
     const ring = this.grid.ringAround(i, j, size, s[0], s[1]);
@@ -755,7 +809,7 @@ export class Game {
     return false;
   }
 
-  private stepPath(v: Villager, dt: number, speed: number) {
+  stepPath(v: Walker, dt: number, speed: number) {
     if (!v.path.length) return false;
     let remain = speed * dt;
     while (remain > 0 && v.path.length) {
@@ -826,6 +880,7 @@ export class Game {
   }
 
   private updateVillager(v: Villager, dt: number) {
+    if (v.dying || v.hidden) return;
     const hungry = this.res.food <= 0;
     const speed = VILLAGER_SPEED * (hungry ? 0.75 : 1);
     const moving = this.stepPath(v, dt, speed);
@@ -837,6 +892,36 @@ export class Game {
       case 'move':
         if (!moving) v.task = { k: 'idle' };
         break;
+      case 'hide': {
+        const tc = this.townCenter();
+        if (!tc) { v.task = { k: 'idle' }; break; }
+        anim = moving ? 'run' : 'idle';
+        if (this.rectDist(v.pos, tc.i, tc.j, tc.size) < 0.9) {
+          // safe inside; villagers inside slowly heal
+          v.hidden = true;
+          v.path = [];
+          v.selected = false;
+          this.releaseFarm(v);
+        } else if (!moving && !this.pathToRect(v, tc.i, tc.j, tc.size)) v.stuck++;
+        break;
+      }
+      case 'repair': {
+        const b = this.buildings.get(task.b);
+        if (!b || !b.repairing) { if (v.job) this.autoJob(v, v.job); else v.task = { k: 'idle' }; break; }
+        const def = BUILDINGS[b.type];
+        if (this.rectDist(v.pos, b.i, b.j, b.size) < (def.blocks ? 0.8 : 0.3)) {
+          v.path = [];
+          anim = 'build';
+          tool = 'hammer';
+          this.face(v, b.mesh.position.x, b.mesh.position.z);
+          b.hp = Math.min(def.hp, b.hp + (def.hp / 18) * dt);
+          if (b.hp >= def.hp) this.finishRepair(b);
+        } else if (!moving) {
+          const ok = def.blocks ? this.pathToRect(v, b.i, b.j, b.size) : this.pathTo(v, b.i, b.j);
+          if (!ok) v.stuck++;
+        }
+        break;
+      }
       case 'dropoff': {
         const b = this.buildings.get(task.b);
         if (!b) { v.task = { k: 'idle' }; break; }
@@ -891,7 +976,7 @@ export class Game {
       }
       case 'farm': {
         const b = this.buildings.get(task.b);
-        if (!b || !b.built) { v.task = { k: 'idle' }; break; }
+        if (!b || !b.built || b.broken) { v.task = { k: 'idle' }; break; }
         if (task.stage === 'drop') {
           if (this.doDrop(v, moving)) { task.stage = 'to'; v.farmSpot = null; }
           break;
@@ -1061,11 +1146,30 @@ export class Game {
 
   private updateBuildings(dt: number) {
     for (const b of this.buildings.values()) {
-      if (!b.built) continue;
+      if (!b.built || b.broken) continue;
       if (b.queue.length) {
         const q = b.queue[0];
         q.t += dt;
-        if (q.t >= VILLAGER_TIME) {
+        if (q.kind === 'soldier' || q.kind === 'scout') {
+          if (q.t >= this.combat.queueTime(q.kind)) {
+            b.queue.shift();
+            const ring = this.grid.ringAround(b.i, b.j, b.size, b.i + 1, b.j + 4);
+            const spot = ring[Math.floor(Math.random() * Math.min(ring.length, 4))] ?? [b.i, b.j + b.size];
+            const u = this.combat.spawn(q.kind, tileToWorld(spot[0]), tileToWorld(spot[1]));
+            u.cheer = 1.2;
+            this.fx.puff(u.pos.clone(), 0xe8dcc4, 10, 0.35);
+            if (q.kind === 'soldier') {
+              this.stats.soldiers = (this.stats.soldiers ?? 0) + 1;
+              this.markGoal('soldier');
+              this.ui.toast('🛡️ A new soldier is ready to protect the town!', true);
+            } else {
+              this.stats.scouts = (this.stats.scouts ?? 0) + 1;
+              this.markGoal('scout');
+              this.ui.toast('🧭 A scout is off to explore!', true);
+            }
+            this.ui.refreshSelection();
+          }
+        } else if (q.t >= VILLAGER_TIME) {
           b.queue.shift();
           const v = this.spawnVillagerAtTC(q.job);
           this.stats.trained++;
@@ -1095,14 +1199,21 @@ export class Game {
       train: () => this.stats.trained > 0,
       house: () => count('house') > 0,
       hunt: () => this.stats.hunted > 0,
-      pop8: () => this.villagers.size >= 8,
+      pop8: () => this.liveVillagers() >= 8,
       farm: () => count('farm') > 0,
       stone: () => this.stats.collected.stone >= 100,
       research: () => this.research.size > 0,
       storehouse: () => count('storehouse') > 0,
       gold: () => this.stats.collected.gold >= 100,
-      pop15: () => this.villagers.size >= 15,
+      pop15: () => this.liveVillagers() >= 15,
       allresearch: () => this.research.size >= RESEARCH.length,
+      barracks: () => count('barracks') > 0,
+      tower: () => count('tower') > 0,
+      soldier: () => (this.stats.soldiers ?? 0) > 0,
+      scout: () => (this.stats.scouts ?? 0) > 0,
+      defend: () => (this.stats.raidsDefended ?? 0) > 0,
+      sam: () => this.combat.samLevel > 1,
+      explore: () => this.fog.fraction() >= 0.5,
     };
     for (const g of GOALS) if (!this.goalsDone.has(g.id) && checks[g.id]?.()) this.markGoal(g.id);
   }
@@ -1122,17 +1233,26 @@ export class Game {
       for (const v of this.villagers.values()) this.updateVillager(v, dt);
       for (const a of this.animals.values()) this.updateAnimal(a, dt);
       this.updateBuildings(dt);
+      this.combat.update(dt);
+      // villagers hiding inside slowly heal
+      for (const v of this.villagers.values()) if (v.hidden) v.hp = Math.min(v.maxHp, v.hp + dt * 2);
+      this.revealT -= dt;
+      if (this.revealT <= 0) {
+        this.revealT = 0.25;
+        for (const v of this.villagers.values()) if (!v.hidden && !v.dying) this.fog.reveal(v.pos.x, v.pos.z, 4);
+        if (this.fog.fraction() >= 0.5) this.markGoal('explore');
+      }
       this.storageWarnT -= dt;
       // villagers eat
       this.upkeepT += dt;
       if (this.upkeepT >= FOOD_UPKEEP_EVERY) {
         this.upkeepT = 0;
         const before = this.res.food;
-        this.res.food = Math.max(0, this.res.food - this.villagers.size);
+        this.res.food = Math.max(0, this.res.food - this.liveVillagers());
         if (before > 0 && this.res.food === 0) this.ui.toast('🍓 Your villagers are hungry! They work slower. Gather food!', true);
       }
       // safety net: the town always has a few villagers
-      if (this.villagers.size < 2) {
+      if (this.liveVillagers() < 3) {
         this.freeVillagerT += dt;
         if (this.freeVillagerT > 30) {
           this.freeVillagerT = 0;
@@ -1156,12 +1276,23 @@ export class Game {
       if (this.goalT > 1) { this.goalT = 0; this.checkGoals(); }
     }
     this.trees.flush();
+    this.fog.update();
     this.rts.update(dt);
     this.updateVisuals(dt);
   }
 
   private updateVisuals(dt: number) {
-    for (const v of this.villagers.values()) {
+    for (const v of [...this.villagers.values()]) {
+      v.mesh.visible = !v.hidden;
+      if (v.hidden) { v.ring.visible = false; continue; }
+      if (v.dying) {
+        v.dying -= dt;
+        if (v.dying < 0.8) v.mesh.position.y -= dt * 0.5;
+        v.ch.mixer.update(dt);
+        v.ring.visible = false;
+        if (v.dying <= 0) { this.root.remove(v.mesh, v.ring); this.villagers.delete(v.id); }
+        continue;
+      }
       v.pos.y = this.terrain.heightAt(v.pos.x, v.pos.z);
       v.mesh.position.copy(v.pos);
       this.animateVillager(v, dt);
@@ -1190,9 +1321,17 @@ export class Game {
       if (f.t > 2.6) { this.root.remove(f.obj); return false; }
       return true;
     });
-    // chimney smoke
+    this.combat.updateVisuals(dt, this.paused);
+    // chimney smoke (and smoke from damaged buildings)
     this.smokeT -= dt;
     if (this.smokeT <= 0) {
+      for (const b of this.buildings.values()) {
+        const max = BUILDINGS[b.type].hp;
+        if (!b.built || b.hp >= max * 0.7) continue;
+        const p = b.mesh.position.clone().setY(b.mesh.position.y + (b.broken ? 0.4 : 1.4));
+        this.fx.smoke.emit({ pos: p, spread: b.size * 0.5, vel: new THREE.Vector3(0.1, 0.7, 0), color: 0x5a5550, size: 0.35, grow: 0.6, life: 2.4, alpha: 0.6 });
+        if (b.hp < max * 0.35 || b.broken) this.fx.glow.emit({ pos: p, spread: b.size * 0.4, vel: new THREE.Vector3(0, 0.9, 0), color: 0xff8a2a, size: 0.25, life: 0.7, alpha: 0.9 });
+      }
       this.smokeT = this.fx.quality === 'low' ? 0.9 : 0.45;
       const t = this.rts.target;
       for (const c of this.chimneys) {
@@ -1260,6 +1399,101 @@ export class Game {
     this.fx.render();
   }
 
+  // ======================= raids: villagers & buildings =======================
+  liveVillagers() {
+    let n = 0;
+    for (const v of this.villagers.values()) if (!v.dying) n++;
+    return n;
+  }
+
+  villagerDown(v: Villager) {
+    v.hp = 0;
+    v.dying = 2.6;
+    v.selected = false;
+    v.path = [];
+    this.releaseFarm(v);
+    this.setTool(v, null);
+    this.setBundle(v, null);
+    playAnim(v.ch, 'Death_A', 0.1);
+    this.ui.toast('😢 A villager was knocked out by the raiders.');
+  }
+
+  hideVillager(v: Villager) {
+    if (v.dying || v.hidden) return;
+    this.releaseFarm(v);
+    v.task = { k: 'hide' };
+    v.path = [];
+  }
+
+  unhideAll() {
+    const tc = this.townCenter();
+    for (const v of this.villagers.values()) {
+      if (v.dying) continue;
+      if (v.hidden && tc) {
+        const ring = this.grid.ringAround(tc.i, tc.j, tc.size, tc.i + 1, tc.j + 4);
+        const spot = ring[Math.floor(Math.random() * Math.min(ring.length, 8))];
+        if (spot) v.pos.set(tileToWorld(spot[0]), 0, tileToWorld(spot[1]));
+      }
+      v.hidden = false;
+      if (v.task.k === 'hide') {
+        if (v.job) this.autoJob(v, v.job);
+        else v.task = { k: 'idle' };
+      }
+    }
+  }
+
+  breakBuilding(b: Building) {
+    const def = BUILDINGS[b.type];
+    b.broken = true;
+    b.repairing = false;
+    b.queue = [];
+    if (b.farmer !== null) {
+      const f = this.villagers.get(b.farmer);
+      if (f && f.task.k === 'farm') f.task = { k: 'idle' };
+      b.farmer = null;
+    }
+    setBroken(b.mesh, true);
+    this.fx.puff(b.mesh.position.clone().setY(b.mesh.position.y + 0.5), 0x8f8577, 24, 0.7);
+    this.ui.toast(`💥 The raiders broke a ${def.name}. Click it later to repair it.`, true);
+    this.ui.refreshSelection();
+  }
+
+  /** Repair costs resources and a question, then villagers do the work */
+  async startRepair(b: Building) {
+    if (b.repairing || b.hp >= BUILDINGS[b.type].hp) return;
+    const ok = await this.tryWithQuestion('mixed', `🔨 Repair the ${BUILDINGS[b.type].name}`, repairCost(b.type));
+    if (!ok) return;
+    b.repairing = true;
+    let workers = this.selectedVillagers();
+    if (!workers.length) {
+      const c = b.mesh.position;
+      workers = [...this.villagers.values()].filter((v) => !v.dying && !v.hidden)
+        .sort((a, b2) => a.pos.distanceTo(c) + (a.task.k === 'idle' ? 0 : 30) - (b2.pos.distanceTo(c) + (b2.task.k === 'idle' ? 0 : 30))).slice(0, 2);
+    }
+    for (const v of workers) this.commandRepair(v, b);
+    this.ui.toast(`🔨 Your villagers are fixing the ${BUILDINGS[b.type].name}!`);
+    this.ui.refreshSelection();
+  }
+
+  commandRepair(v: Villager, b: Building) {
+    this.releaseFarm(v);
+    v.task = { k: 'repair', b: b.id };
+    v.path = [];
+  }
+
+  private finishRepair(b: Building) {
+    b.hp = BUILDINGS[b.type].hp;
+    b.repairing = false;
+    if (b.broken) {
+      b.broken = false;
+      setBroken(b.mesh, false);
+    }
+    this.fx.puff(b.mesh.position.clone().setY(b.mesh.position.y + 0.4), 0xd6c4a3, 16, 0.5);
+    this.ui.toast(`🔨 The ${BUILDINGS[b.type].name} is as good as new!`, true);
+    for (const v of this.villagers.values()) if (v.task.k === 'repair' && v.task.b === b.id) { v.cheer = 1.4; v.task = { k: 'idle' }; if (v.job) this.autoJob(v, v.job); }
+    this.ui.refreshSelection();
+  }
+
   // ======================= villager looks =======================
   private animateVillager(v: Villager, dt: number) {
     const ch = v.ch;
@@ -1322,15 +1556,26 @@ export class Game {
 
   pick(cx: number, cy: number): Target {
     // villagers and animals: closest on screen
+    const seen = (p: THREE.Vector3) => this.fog.isExplored(worldToTile(p.x), worldToTile(p.z));
     let bestV: Villager | null = null, bv = 26;
     for (const v of this.villagers.values()) {
+      if (v.hidden || v.dying) continue;
       const s = this.screenPos(v.pos);
       const d = Math.hypot(s.x - cx, s.y - cy);
       if (d < bv) { bv = d; bestV = v; }
     }
+    let bestU: Unit | null = null, bu = bestV ? bv : 28;
+    for (const u of this.combat.units.values()) {
+      if (u.dying || !seen(u.pos)) continue;
+      const s = this.screenPos(u.pos);
+      const d = Math.hypot(s.x - cx, s.y - cy);
+      if (d < bu) { bu = d; bestU = u; }
+    }
+    if (bestU) return { kind: 'unit', unit: bestU };
     if (bestV) return { kind: 'villager', villager: bestV };
     let bestA: Animal | null = null, ba = 30;
     for (const a of this.animals.values()) {
+      if (!seen(a.pos)) continue;
       const s = this.screenPos(a.pos, 0.4);
       const d = Math.hypot(s.x - cx, s.y - cy);
       if (d < ba) { ba = d; bestA = a; }
@@ -1347,7 +1592,7 @@ export class Game {
       for (let di = -1; di <= 1; di++) {
         const id = this.nodeAt.get((j + dj) * MAP + (i + di));
         const n = id !== undefined ? this.nodes.get(id) : undefined;
-        if (!n) continue;
+        if (!n || !this.fog.isExplored(n.i, n.j)) continue;
         const s = this.screenPos(n.mesh.position, n.kind === 'tree' ? 0.6 : 0.2);
         const d = Math.hypot(s.x - cx, s.y - cy);
         if (d < bn) { bn = d; bestN = n; }
@@ -1404,7 +1649,7 @@ export class Game {
         if (this.placing) { this.cancelPlacement(); return; }
         const t = this.pick(e.clientX, e.clientY);
         const g = this.groundPoint(e.clientX, e.clientY);
-        if (this.selectedVillagers().length && g) this.commandTarget(t, g);
+        if ((this.selectedVillagers().length || this.selectedUnits().length) && g) this.commandTarget(t, g);
       }
     });
     window.addEventListener('keydown', (e) => {
@@ -1419,14 +1664,21 @@ export class Game {
     const t = this.pick(cx, cy);
     const g = this.groundPoint(cx, cy);
     const sel = this.selectedVillagers();
+    const selU = this.selectedUnits();
     if (t.kind === 'villager') {
       if (shift && t.villager.selected) { t.villager.selected = false; this.ui.refreshSelection(); }
       else this.setSelected([t.villager], shift);
       return;
     }
-    if (sel.length && g) {
+    if (t.kind === 'unit' && t.unit.kind !== 'raider') {
+      if (t.unit.kind === 'sam') { this.ui.toast('🛡️ General Sam fights on his own. He always protects the town!'); return; }
+      if (shift && t.unit.selected) { t.unit.selected = false; this.ui.refreshSelection(); }
+      else this.setSelected([], shift, [t.unit]);
+      return;
+    }
+    if ((sel.length || selU.length) && g) {
       // with villagers selected, clicking a thing tells them to work on it
-      if (t.kind === 'building' && t.building.built && t.building.type !== 'farm' && !sel.some((v) => v.carry.amt > 0)) {
+      if (t.kind === 'building' && t.building.built && t.building.type !== 'farm' && !t.building.repairing && !t.building.broken && !sel.some((v) => v.carry.amt > 0) && !selU.length) {
         this.selectBuilding(t.building);
         return;
       }
@@ -1440,11 +1692,13 @@ export class Game {
 
   private boxSelect(x0: number, y0: number, x1: number, y1: number, add: boolean) {
     const minX = Math.min(x0, x1), maxX = Math.max(x0, x1), minY = Math.min(y0, y1), maxY = Math.max(y0, y1);
-    const vs = [...this.villagers.values()].filter((v) => {
-      const s = this.screenPos(v.pos);
+    const inBox = (p: THREE.Vector3) => {
+      const s = this.screenPos(p);
       return s.x >= minX && s.x <= maxX && s.y >= minY && s.y <= maxY;
-    });
-    this.setSelected(vs, add);
+    };
+    const vs = [...this.villagers.values()].filter((v) => !v.hidden && !v.dying && inBox(v.pos));
+    const us = [...this.combat.units.values()].filter((u) => !u.dying && (u.kind === 'soldier' || u.kind === 'scout') && inBox(u.pos));
+    this.setSelected(vs, add, us);
   }
 
   private onHover(cx: number, cy: number) {
@@ -1465,12 +1719,16 @@ export class Game {
     }
     const t = this.pick(cx, cy);
     let text = '';
-    if (t.kind === 'node') text = `${NODE_LABEL[t.node.kind]} · ${Math.ceil(t.node.amount)} ${RES_ICON[t.node.res]} left`;
+    const gp = this.groundPoint(cx, cy);
+    if (t.kind === 'unit') text = { soldier: '🛡️ Soldier', scout: '🧭 Scout', raider: '⚔️ Raider! Send soldiers to fight it', sam: '🛡️ General Sam' }[t.unit.kind];
+    else if ((t.kind === 'ground' || t.kind === 'none') && gp && !this.fog.isExplored(worldToTile(gp.x), worldToTile(gp.z))) text = '☁️ Unexplored land · send a scout';
+    else if (t.kind === 'node') text = `${NODE_LABEL[t.node.kind]} · ${Math.ceil(t.node.amount)} ${RES_ICON[t.node.res]} left`;
     else if (t.kind === 'animal') text = '🦌 Deer · hunt it for food';
     else if (t.kind === 'villager') text = `🧑 Villager · ${this.villagerStatus(t.villager)}`;
     else if (t.kind === 'building') {
       const def = BUILDINGS[t.building.type];
-      text = `${def.emoji} ${def.name}${t.building.built ? '' : ` · being built (${Math.floor(t.building.progress * 100)}%)`}`;
+      const b = t.building;
+      text = `${def.emoji} ${def.name}${b.built ? '' : ` · being built (${Math.floor(b.progress * 100)}%)`}${b.broken ? ' · broken, needs repair' : b.built && b.hp < def.hp ? ' · damaged' : ''}`;
     }
     this.hoverText = text;
     this.renderer.domElement.style.cursor = t.kind === 'none' || t.kind === 'ground' ? 'default' : 'pointer';
@@ -1493,8 +1751,11 @@ export class Game {
         v: 1, seed: this.seed, res: this.res, research: [...this.research], goals: [...this.goalsDone], stats: this.stats, skills: this.skills,
         playTime: this.playTime, nextId: this.nextId, stumps: this.stumps,
         nodes: [...this.nodes.values()].map((n) => [n.id, n.kind, n.i, n.j, Math.round(n.amount * 10) / 10]),
-        buildings: [...this.buildings.values()].map((b) => ({ id: b.id, type: b.type, i: b.i, j: b.j, built: b.built, progress: b.progress, hp: b.hp, queue: b.queue, research: b.research, farmer: b.farmer })),
-        villagers: [...this.villagers.values()].map((v) => ({ id: v.id, x: v.pos.x, z: v.pos.z, job: v.job, carry: v.carry, task: v.task })),
+        buildings: [...this.buildings.values()].map((b) => ({ id: b.id, type: b.type, i: b.i, j: b.j, built: b.built, progress: b.progress, hp: b.hp, queue: b.queue, research: b.research, farmer: b.farmer, broken: b.broken, repairing: b.repairing })),
+        villagers: [...this.villagers.values()].filter((v) => !v.dying).map((v) => ({ id: v.id, x: v.pos.x, z: v.pos.z, job: v.job, carry: v.carry, task: v.task, hp: v.hp })),
+        combat: this.combat.serialize(),
+        fog: this.fog.serialize(),
+        dayT: this.fx.dayT,
         animals: [...this.animals.values()].map((a) => [a.id, a.pos.x, a.pos.z]),
         camera: [this.rts.target.x, this.rts.target.z, this.rts.wantDist],
       };
@@ -1531,7 +1792,9 @@ export class Game {
     for (const b of data.buildings) {
       const nb = this.addBuilding(b.type, b.i, b.j, b.built, b.id);
       nb.progress = b.progress; nb.hp = b.hp; nb.queue = b.queue ?? []; nb.research = b.research ?? null; nb.farmer = b.farmer ?? null;
+      nb.broken = !!b.broken; nb.repairing = !!b.repairing;
       setBuildProgress(nb.mesh, nb.progress, nb.built);
+      if (nb.broken) setBroken(nb.mesh, true);
     }
     for (const [id, kind, i, j, amount] of data.nodes) this.addNode(kind, i, j, amount, id);
     for (const [i, j] of data.stumps ?? []) this.addStump(i, j);
@@ -1539,15 +1802,21 @@ export class Game {
     for (const v of data.villagers) {
       const nv = this.spawnVillager(v.x, v.z, null, v.id);
       nv.job = v.job;
+      nv.hp = v.hp ?? nv.maxHp;
       nv.carry = v.carry ?? { res: null, amt: 0 };
       this.setBundle(nv, nv.carry.amt > 0 ? nv.carry.res : null);
       const t = v.task as Task;
-      if (t && (t.k === 'gather' || t.k === 'farm' || t.k === 'build' || t.k === 'dropoff')) nv.task = t;
+      if (t && (t.k === 'gather' || t.k === 'farm' || t.k === 'build' || t.k === 'dropoff' || t.k === 'repair')) nv.task = t;
       else if (t && t.k === 'hunt') nv.task = { k: 'hunt', a: t.a, repath: 0 };
       if (nv.task.k === 'gather' && nv.task.stage === 'work') nv.task.stage = 'to';
       if (nv.task.k === 'farm' && nv.task.stage === 'work') nv.task.stage = 'to';
     }
     this.nextId = Math.max(data.nextId ?? 1, ...[...this.nodes.keys(), ...this.villagers.keys(), ...this.buildings.keys(), ...this.animals.keys()].map((k) => k + 1));
+    this.combat.load(data.combat);
+    if (data.fog) this.fog.load(data.fog);
+    else this.fog.reveal(0.5, 0.5, 14);
+    if (typeof data.dayT === 'number') this.fx.dayT = data.dayT;
+    this.nextId = Math.max(this.nextId, ...[...this.combat.units.keys()].map((k) => k + 1));
     if (data.camera) { this.rts.focus(data.camera[0], data.camera[1]); this.rts.wantDist = data.camera[2]; }
     return true;
   }
@@ -1555,6 +1824,7 @@ export class Game {
 
 export type Target =
   | { kind: 'villager'; villager: Villager }
+  | { kind: 'unit'; unit: Unit }
   | { kind: 'animal'; animal: Animal }
   | { kind: 'node'; node: ResNode }
   | { kind: 'building'; building: Building }

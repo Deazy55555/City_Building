@@ -1,7 +1,7 @@
 export type Res = 'food' | 'wood' | 'stone' | 'gold';
 export type Cost = Partial<Record<Res, number>>;
 export type Subject = 'math' | 'reading' | 'science' | 'mixed';
-export type BType = 'towncenter' | 'house' | 'farm' | 'storehouse';
+export type BType = 'towncenter' | 'house' | 'farm' | 'storehouse' | 'barracks' | 'tower';
 
 export const RES: Res[] = ['food', 'wood', 'stone', 'gold'];
 export const RES_ICON: Record<Res, string> = { food: '🍓', wood: '🪵', stone: '🪨', gold: '🪙' };
@@ -42,9 +42,35 @@ export const BUILDINGS: Record<BType, BuildingDef> = {
     hp: 400, storage: 200, dropsite: true, blocks: true,
     desc: 'Villagers can drop off here. Holds 200 more of everything.',
   },
+  barracks: {
+    type: 'barracks', name: 'Barracks', emoji: '⚔️', size: 2, cost: { wood: 120, stone: 40 }, buildTime: 50, subject: 'math',
+    hp: 800, blocks: true, desc: 'Trains soldiers to protect your town.',
+  },
+  tower: {
+    type: 'tower', name: 'Watch Tower', emoji: '🗼', size: 2, cost: { wood: 40, stone: 80 }, buildTime: 45, subject: 'math',
+    hp: 700, blocks: true, desc: 'Shoots arrows at raiders who come close.',
+  },
 };
 
-export const BUILD_MENU: BType[] = ['house', 'farm', 'storehouse'];
+export const BUILD_MENU: BType[] = ['house', 'farm', 'storehouse', 'barracks', 'tower'];
+
+export const SOLDIER_COST: Cost = { food: 40, gold: 20 };
+export const SOLDIER_TIME = 35;
+export const SCOUT_COST: Cost = { food: 60 };
+export const SCOUT_TIME = 30;
+/** Cost to upgrade General Sam from level L to L+1 */
+export function samUpgradeCost(level: number): Cost {
+  return { food: 60 * level, gold: 50 * level };
+}
+export const SAM_MAX_LEVEL = 5;
+/** Repairs cost a bit of what the building cost */
+export function repairCost(t: BType): Cost {
+  const c = BUILDINGS[t].cost;
+  const out: Cost = {};
+  for (const r of Object.keys(c) as Res[]) out[r] = Math.max(10, Math.ceil((c[r] ?? 0) * 0.35));
+  if (t === 'towncenter') return { wood: 60, stone: 40 };
+  return out;
+}
 
 export const VILLAGER_COST: Cost = { food: 50 };
 export const VILLAGER_TIME = 30;
@@ -92,6 +118,13 @@ export const GOALS: GoalDef[] = [
   { id: 'stone', text: 'Collect 100 stone', reward: { food: 50 } },
   { id: 'research', text: 'Research something at the Town Center', reward: { gold: 30 } },
   { id: 'storehouse', text: 'Build a Storehouse', reward: { food: 60 } },
+  { id: 'barracks', text: 'Build a Barracks', reward: { gold: 40 } },
+  { id: 'soldier', text: 'Train a soldier', reward: { food: 50 } },
+  { id: 'defend', text: 'Defend your town from raiders', reward: { gold: 50 } },
+  { id: 'tower', text: 'Build a Watch Tower', reward: { wood: 60 } },
+  { id: 'scout', text: 'Train a scout to explore', reward: { food: 50 } },
+  { id: 'sam', text: 'Make General Sam stronger', reward: { gold: 60 } },
+  { id: 'explore', text: 'Explore half of the map', reward: { gold: 80 } },
   { id: 'gold', text: 'Collect 100 gold', reward: { wood: 80 } },
   { id: 'pop15', text: 'Have 15 villagers', reward: { food: 100, gold: 50 } },
   { id: 'allresearch', text: 'Finish all 4 Town Center research', reward: { stone: 100 } },

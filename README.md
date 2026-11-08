@@ -17,6 +17,9 @@ See [DESIGN.md](DESIGN.md) for the full game design and build phases.
 | Move the camera | W A S D, arrow keys, or drag with the right mouse button |
 | Zoom / turn | Mouse wheel / Q and E |
 | Find idle villagers | The 😴 button or the `.` key |
+| Soldiers & scouts | Click or box-select them, then click where to go (click a raider to attack) |
+| Hide villagers during a raid | 🔔 Ring the bell |
+| Jump around the map | Click the little map in the corner |
 
 ## Turning on GitHub Pages (one time)
 Repo **Settings → Pages → Build and deployment → Source: GitHub Actions**. Every push to `main` then rebuilds the game.
