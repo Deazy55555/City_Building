@@ -61,7 +61,10 @@ His accuracy by skill, a difficulty adjustment, timer speed, an optional daily p
 
 ## Tech
 - Vite + TypeScript + Three.js (3D, fixed angled camera, scroll to zoom, drag or WASD to pan).
-- The low-poly models are built in code for now. Free low-poly model packs can replace them later.
+- Models: KayKit (CC0) animated characters, buildings, trees, rocks and scenery. Deer and berry bushes are still built in code.
+- Graphics: day/night cycle (10 minutes of play), drifting clouds, birds, jumping fish, animated water with shore foam,
+  textured ground with dirt paths that wear in where villagers walk, swaying trees and grass, chimney smoke, falling trees,
+  dust and confetti. High / Medium / Low setting (auto steps down if slow).
 - Saves are kept in the browser's localStorage on that laptop.
 - Read-aloud uses the browser's speech voices, and the game picks the most natural-sounding English voice available.
 - Hosted on GitHub Pages.

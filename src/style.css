@@ -172,3 +172,8 @@ button { font-family: inherit; cursor: pointer; }
 @keyframes drop { from { transform: translateY(-12px); opacity: 0; } }
 @keyframes pulse { 50% { filter: brightness(1.12); transform: scale(1.03); } }
 @keyframes glow { 0% { box-shadow: 0 0 0 0 #ffd34dcc, 0 20px 40px #0006; } 100% { box-shadow: 0 0 0 30px #ffd34d00, 0 20px 40px #0006; } }
+.loading { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; background: radial-gradient(#bfe4ff, #6fb4ef); color: #2b2118; z-index: 20; }
+.loading h1 { font-size: 46px; margin: 0 0 16px; }
+.loading p { font-size: 20px; font-weight: 700; }
+.load-bar { width: 320px; height: 22px; border: 4px solid #8a6a3f; border-radius: 14px; background: #fff8ea; overflow: hidden; }
+.load-bar div { height: 100%; width: 0; background: linear-gradient(#6fd17f, #3aa655); transition: width 0.2s; }

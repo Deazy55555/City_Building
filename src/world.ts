@@ -1,6 +1,8 @@
 import * as THREE from 'three';
 import { makeNoise, mulberry32 } from './util';
 import { mat } from './models';
+import { model, type StaticName } from './assets';
+import { U } from './uniforms';
 
 export const MAP = 72;
 
@@ -20,6 +22,11 @@ export class Terrain {
   mesh: THREE.Mesh;
   waterMesh: THREE.Mesh;
   decor: THREE.Group;
+  /** how worn the ground is (0..1) per tile: villagers wear dirt paths into the grass */
+  wear = new Float32Array(MAP * MAP);
+  wearTex: THREE.DataTexture;
+  private wearData = new Uint8Array(MAP * MAP * 4);
+  scenery: THREE.Group;
 
   constructor(public seed: number) {
     this.noise = makeNoise(seed);
@@ -38,9 +45,14 @@ export class Terrain {
     for (let j = 0; j < MAP; j++)
       for (let i = 0; i < MAP; i++) if (this.lakeFactor(tileToWorld(i), tileToWorld(j)) > 0.45) this.water[j * MAP + i] = 1;
 
+    this.wearTex = new THREE.DataTexture(this.wearData, MAP, MAP, THREE.RGBAFormat);
+    this.wearTex.magFilter = THREE.LinearFilter;
+    this.wearTex.minFilter = THREE.LinearFilter;
+    this.wearTex.needsUpdate = true;
     this.mesh = this.buildMesh();
     this.waterMesh = this.buildWater();
     this.decor = this.buildDecor(rnd);
+    this.scenery = this.buildScenery(rnd);
   }
 
   lakeFactor(x: number, z: number) {
@@ -90,26 +102,178 @@ export class Terrain {
     }
     geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
     geo.computeVertexNormals();
-    const material = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95, flatShading: true });
+    const material = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95, flatShading: false });
+    const wearTex = this.wearTex;
+    material.onBeforeCompile = (sh) => {
+      sh.uniforms.wearMap = { value: wearTex };
+      sh.uniforms.detailMap = { value: detailTexture() };
+      sh.vertexShader = sh.vertexShader
+        .replace('#include <common>', '#include <common>\nvarying vec3 vWPos;')
+        .replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\nvWPos = (modelMatrix * vec4(transformed, 1.0)).xyz;');
+      sh.fragmentShader = sh.fragmentShader
+        .replace('#include <common>', '#include <common>\nvarying vec3 vWPos; uniform sampler2D wearMap; uniform sampler2D detailMap;')
+        .replace('#include <color_fragment>', `#include <color_fragment>
+          float det = texture2D(detailMap, vWPos.xz * 0.45).r;
+          float det2 = texture2D(detailMap, vWPos.xz * 0.07 + 0.3).r;
+          diffuseColor.rgb *= 0.86 + 0.22 * det + 0.12 * (det2 - 0.5);
+          vec2 wuv = (vWPos.xz + ${(MAP / 2).toFixed(1)}) / ${MAP.toFixed(1)};
+          float inside = step(0.0, wuv.x) * step(wuv.x, 1.0) * step(0.0, wuv.y) * step(wuv.y, 1.0);
+          float wear = texture2D(wearMap, wuv).r * inside;
+          vec3 dirt = vec3(0.56, 0.43, 0.29) * (0.85 + 0.3 * det);
+          diffuseColor.rgb = mix(diffuseColor.rgb, dirt, smoothstep(0.12, 0.75, wear + (det - 0.5) * 0.25));`);
+    };
     const mesh = new THREE.Mesh(geo, material);
     mesh.receiveShadow = true;
     return mesh;
   }
 
   private buildWater() {
-    const geo = new THREE.PlaneGeometry(MAP + 24, MAP + 24, 1, 1);
+    const ext = MAP + 24, res = 192;
+    const heights = new Float32Array(res * res);
+    for (let j = 0; j < res; j++)
+      for (let i = 0; i < res; i++) heights[j * res + i] = this.heightAt((i / (res - 1) - 0.5) * ext, (j / (res - 1) - 0.5) * ext);
+    const hTex = new THREE.DataTexture(heights, res, res, THREE.RedFormat, THREE.FloatType);
+    hTex.magFilter = THREE.LinearFilter;
+    hTex.minFilter = THREE.LinearFilter;
+    hTex.needsUpdate = true;
+    const geo = new THREE.PlaneGeometry(ext, ext, 1, 1);
     geo.rotateX(-Math.PI / 2);
-    const material = new THREE.MeshStandardMaterial({ color: 0x3f9fd8, transparent: true, opacity: 0.78, roughness: 0.15, metalness: 0.1 });
+    const material = new THREE.ShaderMaterial({
+      uniforms: THREE.UniformsUtils.merge([
+        THREE.UniformsLib.fog,
+        { heightMap: { value: null }, time: { value: 0 }, sunDir: { value: new THREE.Vector3(0.4, 0.8, 0.3) }, night: { value: 0 }, ext: { value: ext } },
+      ]),
+      vertexShader: `
+        varying vec3 vW; varying vec2 vUv;
+        #include <fog_pars_vertex>
+        void main() {
+          vec4 w = modelMatrix * vec4(position, 1.0);
+          vW = w.xyz; vUv = uv;
+          vec4 mvPosition = viewMatrix * w;
+          gl_Position = projectionMatrix * mvPosition;
+          #include <fog_vertex>
+        }`,
+      fragmentShader: `
+        uniform sampler2D heightMap; uniform float time; uniform vec3 sunDir; uniform float night; uniform float ext;
+        varying vec3 vW; varying vec2 vUv;
+        #include <fog_pars_fragment>
+        void main() {
+          float h = texture2D(heightMap, vec2(vUv.x, 1.0 - vUv.y)).r;
+          float depth = vW.y - h;
+          if (depth < -0.02) discard;
+          vec2 p = vW.xz;
+          float w1 = sin(p.x * 2.1 + time * 1.3) + sin(p.y * 1.7 - time * 1.1);
+          float w2 = sin((p.x + p.y) * 3.3 + time * 2.0) * 0.5 + sin((p.x - p.y) * 2.7 - time * 1.7) * 0.5;
+          vec3 n = normalize(vec3(cos(p.x * 2.1 + time * 1.3) * 0.12 + cos((p.x + p.y) * 3.3 + time * 2.0) * 0.08,
+                                  1.0,
+                                  -cos(p.y * 1.7 - time * 1.1) * 0.12 + cos((p.x - p.y) * 2.7 - time * 1.7) * 0.08));
+          vec3 shallow = vec3(0.36, 0.78, 0.84), deep = vec3(0.07, 0.36, 0.62);
+          vec3 col = mix(shallow, deep, smoothstep(0.02, 0.5, depth));
+          vec3 v = normalize(cameraPosition - vW);
+          vec3 r = reflect(-normalize(sunDir), n);
+          float spec = pow(max(dot(r, v), 0.0), 80.0) * 0.9;
+          float fres = pow(1.0 - max(dot(n, v), 0.0), 3.0);
+          col = mix(col, vec3(0.75, 0.88, 1.0), fres * 0.35);
+          col += vec3(1.0, 0.95, 0.85) * spec * (1.0 - night);
+          // foam along the shore, gently moving
+          float band = smoothstep(0.16, 0.0, depth);
+          float ripple = step(0.55, fract(depth * 9.0 - time * 0.35 + (w1 + w2) * 0.08));
+          float foam = clamp(band * (0.55 + 0.45 * ripple), 0.0, 1.0);
+          col = mix(col, vec3(0.96, 0.99, 1.0), foam * 0.85);
+          col *= mix(1.0, 0.42, night);
+          gl_FragColor = vec4(col, mix(0.62, 0.9, smoothstep(0.0, 0.35, depth)) + foam * 0.1);
+          #include <tonemapping_fragment>
+          #include <colorspace_fragment>
+          #include <fog_fragment>
+        }`,
+      transparent: true,
+      fog: true,
+      depthWrite: false,
+    });
+    material.uniforms.heightMap.value = hTex;
+    material.uniforms.time = U.time;
+    material.uniforms.night = U.night;
     const w = new THREE.Mesh(geo, material);
     w.position.y = -0.12;
+    w.renderOrder = 1;
     return w;
+  }
+
+  /** Mountains, hills and water plants around the edges (decoration only) */
+  private buildScenery(rnd: () => number) {
+    const g = new THREE.Group();
+    const half = MAP / 2;
+    const put = (name: StaticName, x: number, z: number, s: number) => {
+      const m = model(name);
+      m.scale.setScalar(s);
+      m.position.set(x, this.heightAt(x, z) - 0.05, z);
+      m.rotation.y = Math.floor(rnd() * 6) * (Math.PI / 3);
+      g.add(m);
+    };
+    const big: StaticName[] = ['mountain_A_grass_trees', 'mountain_B_grass_trees', 'mountain_C_grass_trees'];
+    const small: StaticName[] = ['hills_A_trees', 'hills_B_trees', 'hills_C_trees', 'trees_A_large', 'trees_B_large'];
+    for (let side = 0; side < 4; side++) {
+      for (let t = -half - 6; t <= half + 6; t += 5.5) {
+        const off1 = half + 3.2 + rnd() * 1.5, off2 = half + 8 + rnd() * 2.5;
+        const pts = side === 0 ? [[t, -off1], [t + 2.7, -off2]] : side === 1 ? [[t, off1], [t + 2.7, off2]] : side === 2 ? [[-off1, t], [-off2, t + 2.7]] : [[off1, t], [off2, t + 2.7]];
+        put(small[Math.floor(rnd() * small.length)], pts[0][0], pts[0][1], 2.6 + rnd() * 1.0);
+        put(big[Math.floor(rnd() * big.length)], pts[1][0], pts[1][1], 3.6 + rnd() * 1.6);
+      }
+    }
+    // lilies and reeds in the lakes
+    for (let j = 1; j < MAP - 1; j++)
+      for (let i = 1; i < MAP - 1; i++) {
+        if (!this.isWater(i, j)) continue;
+        const x = tileToWorld(i), z = tileToWorld(j);
+        const shore = !this.isWater(i + 1, j) || !this.isWater(i - 1, j) || !this.isWater(i, j + 1) || !this.isWater(i, j - 1);
+        const r = rnd();
+        if (shore && r < 0.3) {
+          const m = model(rnd() < 0.5 ? 'waterplant_A' : 'waterplant_B');
+          m.scale.setScalar(1.6);
+          m.position.set(x + (rnd() - 0.5) * 0.6, this.heightAt(x, z), z + (rnd() - 0.5) * 0.6);
+          g.add(m);
+        } else if (!shore && r < 0.12) {
+          const m = model(rnd() < 0.5 ? 'waterlily_A' : 'waterlily_B');
+          m.scale.setScalar(1.8);
+          m.position.set(x + (rnd() - 0.5) * 0.6, -0.11, z + (rnd() - 0.5) * 0.6);
+          m.rotation.y = rnd() * 6;
+          g.add(m);
+        }
+      }
+    return g;
+  }
+
+  /** Called as villagers walk: wear a path into the grass */
+  addWear(i: number, j: number, amt: number) {
+    if (i < 0 || j < 0 || i >= MAP || j >= MAP) return;
+    const k = j * MAP + i;
+    this.wear[k] = Math.min(1, this.wear[k] + amt);
+  }
+
+  /** Paths slowly grow back; push the latest wear values to the GPU */
+  refreshWear(decay: number) {
+    for (let k = 0; k < this.wear.length; k++) {
+      if (decay) this.wear[k] = Math.max(this.wear[k] * (1 - decay), this.wear[k] > 0.95 ? this.wear[k] : 0);
+      this.wearData[k * 4] = Math.round(this.wear[k] * 255);
+    }
+    this.wearTex.needsUpdate = true;
   }
 
   private buildDecor(rnd: () => number) {
     const g = new THREE.Group();
     // grass tufts and flowers using instancing (cheap to draw)
     const tuftGeo = new THREE.ConeGeometry(0.05, 0.22, 3);
-    const tufts = new THREE.InstancedMesh(tuftGeo, mat(0x4f9a35), 2600);
+    const tuftMat = mat(0x4f9a35).clone();
+    tuftMat.onBeforeCompile = (sh) => {
+      sh.uniforms.time = U.time;
+      sh.vertexShader = sh.vertexShader
+        .replace('#include <common>', '#include <common>\nuniform float time;')
+        .replace('#include <begin_vertex>', `#include <begin_vertex>
+          vec4 ip = instanceMatrix * vec4(0.0, 0.0, 0.0, 1.0);
+          float sw = sin(time * 1.8 + ip.x * 0.7 + ip.z * 0.5) * 0.35 + sin(time * 3.1 + ip.x * 1.3) * 0.12;
+          transformed.x += sw * max(position.y + 0.11, 0.0);`);
+    };
+    const tufts = new THREE.InstancedMesh(tuftGeo, tuftMat, 3200);
     const flowerGeo = new THREE.IcosahedronGeometry(0.045, 0);
     const flowerColors = [0xffffff, 0xffd84a, 0xe86fa8, 0x9b7fe8];
     const flowers = flowerColors.map((col) => new THREE.InstancedMesh(flowerGeo, mat(col, 0.6), 220));
@@ -134,7 +298,7 @@ export class Terrain {
       inst.instanceMatrix.needsUpdate = true;
       g.add(inst);
     };
-    place(tufts, 2600, 0.7, 1.4, 0.08);
+    place(tufts, 3200, 0.7, 1.5, 0.08);
     for (const f of flowers) place(f, 220, 0.8, 1.2, 0.12);
     place(pebbles, 300, 0.6, 1.5, 0.02);
     return g;
@@ -255,4 +419,34 @@ export class Grid {
         }
     return null;
   }
+}
+
+let _detail: THREE.Texture | null = null;
+/** Speckled noise texture that gives the grass some texture */
+function detailTexture() {
+  if (_detail) return _detail;
+  const N = 256;
+  const c = document.createElement('canvas');
+  c.width = c.height = N;
+  const g = c.getContext('2d')!;
+  const img = g.createImageData(N, N);
+  const noise = makeNoise(4242);
+  for (let y = 0; y < N; y++)
+    for (let x = 0; x < N; x++) {
+      // tileable: sample noise on a torus-ish wrap by blending
+      const u = x / N, v = y / N;
+      const n = (noise(u * 8, v * 8) * (1 - u) * (1 - v) + noise((u - 1) * 8, v * 8) * u * (1 - v) + noise(u * 8, (v - 1) * 8) * (1 - u) * v + noise((u - 1) * 8, (v - 1) * 8) * u * v);
+      const speck = Math.random() * 0.35;
+      const val = Math.max(0, Math.min(255, (n * 0.75 + speck) * 255));
+      const k = (y * N + x) * 4;
+      img.data[k] = img.data[k + 1] = img.data[k + 2] = val;
+      img.data[k + 3] = 255;
+    }
+  g.putImageData(img, 0, 0);
+  const t = new THREE.CanvasTexture(c);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  t.colorSpace = THREE.NoColorSpace;
+  t.anisotropy = 4;
+  _detail = t;
+  return t;
 }

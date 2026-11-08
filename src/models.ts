@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import type { BType } from './data';
+import { atlasMaterial, model, type StaticName } from './assets';
 
 // ---------- shared materials & geometry ----------
 const matCache = new Map<string, THREE.MeshStandardMaterial>();
@@ -82,146 +83,6 @@ export interface VillagerParts {
   bundle: THREE.Mesh;
 }
 
-export function makeVillager(rnd: () => number = Math.random) {
-  const pickc = (arr: number[]) => arr[Math.floor(rnd() * arr.length)];
-  const g = new THREE.Group();
-  const inner = new THREE.Group();
-  g.add(inner);
-  const tunic = pickc(COLORS.tunic);
-  const skin = mat(pickc(COLORS.skin), 0.7);
-  const pants = mat(0x5b4636);
-
-  const mkLeg = (x: number) => {
-    const hip = new THREE.Group();
-    hip.position.set(x, 0.32, 0);
-    hip.add(m(box(0.09, 0.32, 0.1), pants, 0, -0.16, 0));
-    hip.add(m(box(0.1, 0.06, 0.14), mat(0x3a2a1e), 0, -0.3, 0.02));
-    inner.add(hip);
-    return hip;
-  };
-  const hipL = mkLeg(-0.065);
-  const hipR = mkLeg(0.065);
-
-  const body = m(box(0.26, 0.32, 0.17), mat(tunic), 0, 0.48, 0);
-  inner.add(body);
-  inner.add(m(box(0.27, 0.05, 0.18), mat(0x4a3220), 0, 0.36, 0));
-  inner.add(m(sphere(0.115, 1), skin, 0, 0.75, 0));
-  const hair = m(sphere(0.12, 1), mat(pickc(COLORS.hair)), 0, 0.79, -0.02);
-  hair.scale.set(1, 0.75, 1);
-  inner.add(hair);
-  // eyes
-  const eye = mat(0x222222);
-  inner.add(m(box(0.025, 0.03, 0.01), eye, -0.04, 0.76, 0.108, false));
-  inner.add(m(box(0.025, 0.03, 0.01), eye, 0.04, 0.76, 0.108, false));
-
-  const mkArm = (x: number) => {
-    const sh = new THREE.Group();
-    sh.position.set(x, 0.62, 0);
-    sh.add(m(box(0.07, 0.26, 0.08), mat(tunic), 0, -0.12, 0));
-    sh.add(m(box(0.065, 0.06, 0.065), skin, 0, -0.27, 0));
-    inner.add(sh);
-    return sh;
-  };
-  const armL = mkArm(-0.17);
-  const armR = mkArm(0.17);
-
-  // tools in right hand
-  const handle = mat(COLORS.darkWood);
-  const metal = mat(0xb8bcc2, 0.4, 0.6);
-  const mkTool = (build: (t: THREE.Group) => void) => {
-    const t = new THREE.Group();
-    t.position.set(0, -0.28, 0.02);
-    build(t);
-    t.visible = false;
-    armR.add(t);
-    return t;
-  };
-  const axe = mkTool((t) => {
-    t.add(m(cyl(0.015, 0.015, 0.32, 5), handle, 0, 0, 0.1).rotateX(Math.PI / 2));
-    t.add(m(box(0.02, 0.09, 0.07), metal, 0, 0.03, 0.24));
-  });
-  const pick = mkTool((t) => {
-    t.add(m(cyl(0.015, 0.015, 0.32, 5), handle, 0, 0, 0.1).rotateX(Math.PI / 2));
-    t.add(m(box(0.02, 0.03, 0.2), metal, 0, 0.0, 0.25).rotateX(Math.PI / 2));
-  });
-  const hammer = mkTool((t) => {
-    t.add(m(cyl(0.015, 0.015, 0.26, 5), handle, 0, 0, 0.08).rotateX(Math.PI / 2));
-    t.add(m(box(0.05, 0.05, 0.1), metal, 0, 0, 0.2).rotateX(Math.PI / 2));
-  });
-  const spear = mkTool((t) => {
-    t.add(m(cyl(0.012, 0.012, 0.6, 5), handle, 0, 0, 0.1).rotateX(Math.PI / 2));
-    t.add(m(cone(0.03, 0.08, 4), metal, 0, 0, 0.43).rotateX(Math.PI / 2));
-  });
-  const basket = new THREE.Group();
-  basket.add(m(cyl(0.08, 0.06, 0.09, 7), mat(0xc8a165), 0, 0, 0));
-  basket.position.set(-0.17, 0.4, 0.1);
-  basket.visible = false;
-  inner.add(basket);
-
-  // bundle carried on the back
-  const bundle = m(box(0.18, 0.16, 0.1), mat(0xffffff), 0, 0.52, -0.14);
-  bundle.visible = false;
-  inner.add(bundle);
-
-  g.scale.setScalar(1.2);
-  const parts: VillagerParts = { hipL, hipR, armL, armR, body, tools: { axe, pick, basket, hammer, spear }, bundle };
-  g.userData.parts = parts;
-  g.userData.inner = inner;
-  return g;
-}
-
-export type VillagerAnim = 'idle' | 'walk' | 'chop' | 'mine' | 'pick' | 'build';
-
-export function animateVillager(g: THREE.Group, anim: VillagerAnim, t: number) {
-  const p = g.userData.parts as VillagerParts;
-  const inner = g.userData.inner as THREE.Group;
-  inner.position.y = 0;
-  p.hipL.rotation.x = 0; p.hipR.rotation.x = 0;
-  p.armL.rotation.x = 0; p.armR.rotation.x = 0;
-  p.armL.rotation.z = 0; p.armR.rotation.z = 0;
-  if (anim === 'walk') {
-    const s = Math.sin(t * 10);
-    p.hipL.rotation.x = s * 0.6;
-    p.hipR.rotation.x = -s * 0.6;
-    p.armL.rotation.x = -s * 0.5;
-    p.armR.rotation.x = s * 0.5;
-    inner.position.y = Math.abs(Math.cos(t * 10)) * 0.03;
-  } else if (anim === 'chop' || anim === 'mine' || anim === 'build') {
-    const speed = anim === 'build' ? 7 : 5;
-    const ph = (t * speed) % (Math.PI * 2);
-    const swing = ph < Math.PI * 1.4 ? -2.4 * (ph / (Math.PI * 1.4)) : -2.4 + 2.4 * ((ph - Math.PI * 1.4) / (Math.PI * 0.6));
-    p.armR.rotation.x = swing;
-    p.armL.rotation.x = swing * 0.6;
-  } else if (anim === 'pick') {
-    p.armR.rotation.x = -1.0 + Math.sin(t * 6) * 0.4;
-    p.armL.rotation.x = -0.4;
-    inner.position.y = -0.02 + Math.sin(t * 6) * 0.01;
-  } else {
-    inner.position.y = Math.sin(t * 2) * 0.005;
-    p.armL.rotation.z = 0.05;
-    p.armR.rotation.z = -0.05;
-  }
-}
-
-export function setVillagerTool(g: THREE.Group, tool: keyof VillagerParts['tools'] | null) {
-  const p = g.userData.parts as VillagerParts;
-  for (const k of Object.keys(p.tools) as (keyof VillagerParts['tools'])[]) p.tools[k].visible = k === tool;
-}
-
-const BUNDLE_COLOR = { food: 0xd8433b, wood: 0x8b5a2b, stone: 0x9a9a9a, gold: 0xf0c419 };
-export function setVillagerBundle(g: THREE.Group, type: keyof typeof BUNDLE_COLOR | null, amount: number) {
-  const p = g.userData.parts as VillagerParts;
-  if (!type || amount <= 0) {
-    p.bundle.visible = false;
-    return;
-  }
-  p.bundle.visible = true;
-  p.bundle.material = mat(BUNDLE_COLOR[type]);
-  const s = 0.5 + Math.min(1, amount / 10) * 0.6;
-  p.bundle.scale.setScalar(s);
-}
-
-// ---------- deer ----------
 export function makeDeer(rnd: () => number = Math.random) {
   const g = new THREE.Group();
   const fur = mat(rnd() < 0.5 ? 0xa0673a : 0x8f5b33);
@@ -266,35 +127,6 @@ export function animateDeer(g: THREE.Group, moving: boolean, grazing: boolean, t
 }
 
 // ---------- resource nodes ----------
-export function makeTree(rnd: () => number) {
-  const g = new THREE.Group();
-  const trunk = mat(COLORS.darkWood);
-  if (rnd() < 0.55) {
-    const c = mat(COLORS.pine[Math.floor(rnd() * COLORS.pine.length)]);
-    g.add(m(cyl(0.06, 0.09, 0.4, 5), trunk, 0, 0.2, 0));
-    g.add(m(cone(0.48, 0.6, 7), c, 0, 0.6, 0));
-    g.add(m(cone(0.38, 0.5, 7), c, 0, 0.92, 0));
-    g.add(m(cone(0.25, 0.42, 7), c, 0, 1.2, 0));
-  } else {
-    const c = mat(COLORS.leaf[Math.floor(rnd() * COLORS.leaf.length)]);
-    g.add(m(cyl(0.07, 0.1, 0.55, 5), trunk, 0, 0.27, 0));
-    g.add(m(sphere(0.42, 0), c, 0, 0.82, 0));
-    g.add(m(sphere(0.28, 0), c, 0.18, 1.05, 0.08));
-    g.add(m(sphere(0.25, 0), c, -0.17, 0.98, -0.1));
-  }
-  const s = 0.85 + rnd() * 0.45;
-  g.scale.set(s, s * (0.9 + rnd() * 0.3), s);
-  g.rotation.y = rnd() * Math.PI * 2;
-  return g;
-}
-
-export function makeStump() {
-  const g = new THREE.Group();
-  g.add(m(cyl(0.09, 0.11, 0.12, 6), mat(COLORS.darkWood), 0, 0.06, 0));
-  g.add(m(cyl(0.085, 0.085, 0.01, 6), mat(0xd6b98a), 0, 0.125, 0, false));
-  return g;
-}
-
 export function makeBerryBush(rnd: () => number) {
   const g = new THREE.Group();
   const leaf = mat(0x3f8f3a);
@@ -315,27 +147,6 @@ export function makeBerryBush(rnd: () => number) {
   return g;
 }
 
-export function makeRock(kind: 'stone' | 'gold', rnd: () => number) {
-  const g = new THREE.Group();
-  const rock = mat(kind === 'stone' ? COLORS.stone : COLORS.darkStone);
-  const n = 3;
-  for (let i = 0; i < n; i++) {
-    const r = 0.18 + rnd() * 0.16;
-    const me = m(dodeca(r), rock, (rnd() - 0.5) * 0.4, r * 0.7, (rnd() - 0.5) * 0.4);
-    me.rotation.set(rnd() * 3, rnd() * 3, rnd() * 3);
-    g.add(me);
-  }
-  if (kind === 'gold') {
-    const gold = mat(0xf2c230, 0.3, 0.8, 0xf2c230);
-    for (let i = 0; i < 6; i++) {
-      const me = m(octa(0.06 + rnd() * 0.04), gold, (rnd() - 0.5) * 0.45, 0.12 + rnd() * 0.25, (rnd() - 0.5) * 0.45);
-      me.rotation.set(rnd() * 3, rnd() * 3, rnd() * 3);
-      g.add(me);
-    }
-  }
-  return g;
-}
-
 export function makeCarcass() {
   const g = new THREE.Group();
   const fur = mat(0x7d4f2c);
@@ -346,139 +157,177 @@ export function makeCarcass() {
 }
 
 // ---------- buildings ----------
-function scaffold(size: number) {
-  const g = new THREE.Group();
-  const pole = mat(0xc9a06a);
-  const s = size / 2 - 0.15;
-  for (const [x, z] of [[s, s], [-s, s], [s, -s], [-s, -s]]) g.add(m(cyl(0.035, 0.035, 1.2, 5), pole, x, 0.6, z));
-  g.add(m(box(size - 0.3, 0.04, 0.04), pole, 0, 1.0, s));
-  g.add(m(box(size - 0.3, 0.04, 0.04), pole, 0, 1.0, -s));
-  g.add(m(box(0.04, 0.04, size - 0.3), pole, s, 0.7, 0));
-  g.add(m(box(0.04, 0.04, size - 0.3), pole, -s, 0.7, 0));
-  return g;
+
+// ---------- trees & rocks (KayKit models) ----------
+export function makeTree(rnd: () => number) {
+  const t = model(rnd() < 0.5 ? 'tree_single_A' : 'tree_single_B');
+  const s = 1.15 + rnd() * 0.5;
+  t.scale.set(s, s * (0.9 + rnd() * 0.25), s);
+  t.rotation.y = rnd() * Math.PI * 2;
+  return t;
 }
 
-function townCenter() {
-  const g = new THREE.Group();
-  const stone = mat(COLORS.stone), dark = mat(COLORS.darkWood), plaster = mat(COLORS.plaster), thatch = mat(COLORS.thatch);
-  g.add(m(box(2.9, 0.28, 2.9), stone, 0, 0.14, 0));
-  g.add(m(box(2.3, 1.15, 2.3), plaster, 0, 0.28 + 0.575, 0));
-  for (const [x, z] of [[1.13, 1.13], [-1.13, 1.13], [1.13, -1.13], [-1.13, -1.13]]) g.add(m(box(0.16, 1.2, 0.16), dark, x, 0.88, z));
-  g.add(m(box(2.42, 0.12, 2.42), dark, 0, 1.46, 0));
-  g.add(m(box(2.42, 0.08, 0.1), dark, 0, 0.9, 1.16));
-  const roof = m(cone(2.05, 1.35, 4), thatch, 0, 1.52 + 0.675, 0);
-  roof.rotation.y = Math.PI / 4;
-  g.add(roof);
-  g.add(m(box(0.55, 0.75, 0.06), dark, 0, 0.28 + 0.375, 1.16));
-  g.add(m(box(0.08, 0.08, 0.02), mat(0xd4af37, 0.3, 0.7), 0.17, 0.66, 1.2));
-  const win = mat(0x3b2f25);
-  for (const x of [-0.75, 0.75]) g.add(m(box(0.32, 0.3, 0.05), win, x, 1.0, 1.16));
-  for (const z of [-0.6, 0.6]) {
-    g.add(m(box(0.05, 0.3, 0.32), win, 1.16, 1.0, z));
-    g.add(m(box(0.05, 0.3, 0.32), win, -1.16, 1.0, z));
-  }
-  g.add(m(box(0.3, 0.9, 0.3), stone, 0.7, 2.2, -0.5));
-  // flag
-  g.add(m(cyl(0.025, 0.025, 1.0, 5), dark, 0, 3.3, 0));
-  const flag = new THREE.Group();
-  flag.position.set(0, 3.65, 0);
-  flag.add(m(box(0.45, 0.28, 0.02), mat(0x2f6fd6), 0.23, 0, 0));
-  flag.add(m(box(0.12, 0.12, 0.03), mat(0xf2c230), 0.23, 0, 0));
-  g.add(flag);
-  g.userData.flag = flag;
-  // banners & barrels
-  g.add(m(cyl(0.12, 0.12, 0.3, 8), mat(COLORS.wood), 1.25, 0.43, 1.3));
-  g.add(m(cyl(0.12, 0.12, 0.3, 8), mat(COLORS.wood), -1.25, 0.43, 1.3));
-  return g;
+export function makeStump(rnd: () => number = Math.random) {
+  const t = model(rnd() < 0.5 ? 'tree_single_A_cut' : 'tree_single_B_cut');
+  t.scale.setScalar(1.3);
+  t.rotation.y = rnd() * 6;
+  return t;
 }
 
-function house(rnd: () => number) {
-  const g = new THREE.Group();
-  g.add(m(box(1.6, 0.15, 1.6), mat(COLORS.stone), 0, 0.075, 0));
-  g.add(m(box(1.3, 0.8, 1.1), mat(COLORS.plaster), 0, 0.55, 0));
-  const dark = mat(COLORS.darkWood);
-  for (const [x, z] of [[0.64, 0.54], [-0.64, 0.54], [0.64, -0.54], [-0.64, -0.54]]) g.add(m(box(0.08, 0.82, 0.08), dark, x, 0.56, z));
-  const roof = prismRoof(1.55, 0.65, 1.4, mat(rnd() < 0.5 ? COLORS.roofRed : COLORS.thatch));
-  roof.position.y = 0.95;
-  g.add(roof);
-  g.add(m(box(0.3, 0.5, 0.05), dark, 0.2, 0.4, 0.56));
-  g.add(m(box(0.25, 0.22, 0.05), mat(0x3b2f25), -0.32, 0.6, 0.56));
-  g.add(m(box(0.18, 0.4, 0.18), mat(COLORS.stone), -0.45, 1.35, -0.2));
-  return g;
-}
+const goldRockMat = () => {
+  const m = atlasMaterial.clone();
+  m.color = new THREE.Color(0x8c8378);
+  return m;
+};
+let _goldRock: THREE.MeshStandardMaterial | null = null;
 
-function farm(rnd: () => number) {
+export function makeRock(kind: 'stone' | 'gold', rnd: () => number) {
   const g = new THREE.Group();
-  g.add(m(box(2.85, 0.08, 2.85), mat(COLORS.soil), 0, 0.04, 0));
-  const crops = new THREE.Group();
-  const green = mat(0x7cbf3f), gold = mat(0xe3c04a);
-  for (let r = 0; r < 5; r++) {
-    g.add(m(box(2.6, 0.03, 0.18), mat(0x5e3f26), 0, 0.09, -1.1 + r * 0.55, false));
-    for (let c = 0; c < 8; c++) {
-      const p = m(cone(0.08, 0.32, 4), rnd() < 0.5 ? green : gold, -1.15 + c * 0.33, 0.24, -1.1 + r * 0.55);
-      crops.add(p);
+  const names: StaticName[] = ['rock_single_B', 'rock_single_C', 'rock_single_D', 'rock_single_E'];
+  const n = 2 + Math.floor(rnd() * 2);
+  for (let i = 0; i < n; i++) {
+    const r = model(names[Math.floor(rnd() * names.length)]);
+    const s = (i === 0 ? 2.0 : 1.3) + rnd() * 0.6;
+    r.scale.set(s, s * (0.9 + rnd() * 0.5), s);
+    r.position.set(i === 0 ? 0 : (rnd() - 0.5) * 0.55, 0, i === 0 ? 0 : (rnd() - 0.5) * 0.55);
+    r.rotation.y = rnd() * 6;
+    if (kind === 'gold') {
+      _goldRock ??= goldRockMat();
+      r.traverse((o) => { if ((o as THREE.Mesh).isMesh) (o as THREE.Mesh).material = _goldRock!; });
     }
+    g.add(r);
   }
-  g.add(crops);
-  g.userData.crops = crops;
+  if (kind === 'gold') {
+    const gold = mat(0xf7c935, 0.25, 0.85, 0xffc400);
+    gold.emissiveIntensity = 0.6;
+    for (let i = 0; i < 7; i++) {
+      const me = m(octa(0.06 + rnd() * 0.05), gold, (rnd() - 0.5) * 0.5, 0.12 + rnd() * 0.3, (rnd() - 0.5) * 0.5);
+      me.rotation.set(rnd() * 3, rnd() * 3, rnd() * 3);
+      g.add(me);
+    }
+  } else {
+    const st = model('resource_stone');
+    st.scale.setScalar(0.9);
+    st.position.set(0.3, 0, 0.25);
+    st.rotation.y = rnd() * 6;
+    g.add(st);
+  }
+  return g;
+}
+
+// ---------- buildings (KayKit models) ----------
+interface BuildingLook { name: StaticName; scale: number; rotY?: number }
+const LOOKS: Record<BType, BuildingLook[]> = {
+  towncenter: [{ name: 'building_castle', scale: 1.3 }],
+  house: [{ name: 'building_home_A', scale: 2.0 }, { name: 'building_home_B', scale: 1.6 }],
+  farm: [{ name: 'building_grain', scale: 1.42 }],
+  storehouse: [{ name: 'building_market', scale: 1.05 }],
+};
+const SIZE: Record<BType, number> = { towncenter: 3, house: 2, farm: 3, storehouse: 2 };
+
+function props(type: BType, rnd: () => number) {
+  const g = new THREE.Group();
+  const put = (name: StaticName, x: number, z: number, s = 1.4, ry = rnd() * 6) => {
+    const p = model(name);
+    p.scale.setScalar(s);
+    p.position.set(x, 0, z);
+    p.rotation.y = ry;
+    g.add(p);
+  };
+  if (type === 'towncenter') {
+    put('barrel', 1.25, 1.2); put('barrel', 1.05, 1.35, 1.2);
+    put('crate_A_big', -1.2, 1.2, 1.3); put('crate_A_small', -1.0, 1.35, 1.3);
+    put('wheelbarrow', 1.3, -1.1, 1.6); put('sack', -1.25, -1.2, 1.6);
+  } else if (type === 'storehouse') {
+    put('resource_lumber', -0.6, 0.75, 1.1, 0); put('resource_stone', 0.6, 0.75, 1.1, 0);
+    put('barrel', 0.8, -0.65, 1.3);
+  } else if (type === 'house') {
+    if (rnd() < 0.6) put(rnd() < 0.5 ? 'barrel' : 'crate_A_small', 0.75, 0.75, 1.2);
+  }
+  return g;
+}
+
+function farmFence() {
+  const g = new THREE.Group();
   const post = mat(COLORS.wood);
   for (let i = 0; i <= 6; i++) {
     const t = -1.4 + i * (2.8 / 6);
-    for (const [x, z] of [[t, 1.4], [t, -1.4], [1.4, t], [-1.4, t]]) g.add(m(box(0.06, 0.25, 0.06), post, x, 0.12, z));
+    for (const [x, z] of [[t, 1.4], [t, -1.4], [1.4, t], [-1.4, t]]) g.add(m(box(0.07, 0.3, 0.07), post, x, 0.15, z));
   }
   for (const [x, z, ry] of [[0, 1.4, 0], [0, -1.4, 0], [1.4, 0, Math.PI / 2], [-1.4, 0, Math.PI / 2]] as const)
-    g.add(m(box(2.8, 0.04, 0.03), post, x, 0.2, z).rotateY(ry));
-  return g;
-}
-
-function storehouse() {
-  const g = new THREE.Group();
-  const wood = mat(COLORS.wood), dark = mat(COLORS.darkWood);
-  g.add(m(box(1.7, 0.12, 1.7), mat(COLORS.stone), 0, 0.06, 0));
-  g.add(m(box(1.5, 0.85, 1.1), wood, 0, 0.55, -0.15));
-  for (let i = 0; i < 5; i++) g.add(m(box(0.03, 0.85, 0.02), dark, -0.6 + i * 0.3, 0.55, 0.41, false));
-  const roof = prismRoof(1.7, 0.5, 1.4, dark);
-  roof.position.set(0, 0.97, -0.15);
-  g.add(roof);
-  g.add(m(box(0.45, 0.6, 0.05), mat(0x3b2f25), 0, 0.42, 0.41));
-  const crate = mat(0xc49a5c);
-  g.add(m(box(0.28, 0.28, 0.28), crate, -0.55, 0.26, 0.6));
-  g.add(m(box(0.22, 0.22, 0.22), crate, -0.52, 0.51, 0.6).rotateY(0.3));
-  g.add(m(cyl(0.12, 0.12, 0.3, 8), wood, 0.55, 0.27, 0.62));
-  g.add(m(cyl(0.12, 0.12, 0.3, 8), wood, 0.3, 0.27, 0.68));
+    g.add(m(box(2.8, 0.05, 0.04), post, x, 0.24, z).rotateY(ry));
   return g;
 }
 
 export function makeBuilding(type: BType, rnd: () => number = Math.random) {
   const wrap = new THREE.Group();
-  const model = type === 'towncenter' ? townCenter() : type === 'house' ? house(rnd) : type === 'farm' ? farm(rnd) : storehouse();
-  wrap.add(model);
-  const size = type === 'towncenter' ? 3 : type === 'farm' ? 3 : 2;
-  const sc = scaffold(size);
-  sc.visible = false;
-  wrap.add(sc);
-  wrap.userData.model = model;
-  wrap.userData.scaffold = sc;
+  const looks = LOOKS[type];
+  const look = looks[Math.floor(rnd() * looks.length)];
+  const model0 = model(look.name);
+  model0.scale.setScalar(look.scale);
+  if (type === 'house') model0.rotation.y = rnd() < 0.5 ? 0 : Math.PI / 2;
+  const main = new THREE.Group();
+  main.add(model0);
+  const size = SIZE[type];
+  if (type === 'farm') {
+    const dirt = model('building_dirt');
+    dirt.scale.setScalar(1.42);
+    dirt.position.y = 0.01;
+    wrap.add(dirt, farmFence());
+    wrap.userData.crops = model0;
+  } else {
+    main.add(props(type, rnd));
+  }
+  wrap.add(main);
+  // construction stages: a little building site that grows, then the real building appears
+  const stages = new THREE.Group();
+  const stageNames: StaticName[] = ['building_stage_A', 'building_stage_B', 'building_stage_C'];
+  for (const n of stageNames) {
+    const s = model(n);
+    s.scale.setScalar(size * 0.78);
+    s.visible = false;
+    stages.add(s);
+  }
+  if (size >= 3 && type !== 'farm') {
+    const sc = model('building_scaffolding');
+    sc.scale.setScalar(1.3);
+    sc.visible = false;
+    stages.add(sc);
+  }
+  wrap.add(stages);
+  wrap.userData.main = main;
+  wrap.userData.stages = stages;
+  wrap.userData.type = type;
   return wrap;
 }
 
 export function setBuildProgress(wrap: THREE.Group, progress: number, built: boolean) {
-  const model = wrap.userData.model as THREE.Group;
-  const sc = wrap.userData.scaffold as THREE.Group;
+  const main = wrap.userData.main as THREE.Group;
+  const stages = (wrap.userData.stages as THREE.Group).children;
+  const isFarm = wrap.userData.type === 'farm';
   if (built) {
-    model.scale.set(1, 1, 1);
-    sc.visible = false;
-  } else {
-    model.scale.set(1, 0.08 + 0.92 * progress, 1);
-    sc.visible = true;
+    main.visible = true;
+    main.scale.set(1, 1, 1);
+    stages.forEach((s) => (s.visible = false));
+    return;
   }
+  if (isFarm) {
+    // fields get planted: crops sprout as it is built
+    main.visible = progress > 0.05;
+    main.scale.set(1, Math.max(0.05, progress), 1);
+    return;
+  }
+  main.visible = false;
+  const k = progress < 0.34 ? 0 : progress < 0.67 ? 1 : 2;
+  stages.forEach((s, i) => (s.visible = i === k || (i === 3 && progress > 0.5)));
 }
 
 /** Translucent copy used to preview placement */
 export function makeGhost(type: BType) {
   const g = makeBuilding(type);
-  const good = new THREE.MeshStandardMaterial({ color: 0x55ff77, transparent: true, opacity: 0.5, depthWrite: false });
-  const bad = new THREE.MeshStandardMaterial({ color: 0xff5555, transparent: true, opacity: 0.5, depthWrite: false });
+  setBuildProgress(g, 1, true);
+  const good = new THREE.MeshStandardMaterial({ color: 0x55ff77, transparent: true, opacity: 0.55, depthWrite: false });
+  const bad = new THREE.MeshStandardMaterial({ color: 0xff5555, transparent: true, opacity: 0.55, depthWrite: false });
   g.traverse((o) => {
     if ((o as THREE.Mesh).isMesh) {
       (o as THREE.Mesh).material = good;

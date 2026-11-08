@@ -444,6 +444,17 @@ export class UI implements GameUI {
         row.append(sel);
         card.append(row);
       }
+      const gq = h('div', 'voice-row', '<label>Graphics </label>');
+      const gsel = h('select');
+      for (const [val, label] of [['high', 'High (best looking)'], ['medium', 'Medium'], ['low', 'Low (fastest)']]) {
+        const o = h('option');
+        o.value = val; o.textContent = label;
+        if (g.fx.quality === val) o.selected = true;
+        gsel.append(o);
+      }
+      gsel.addEventListener('change', () => g.fx.setQuality(gsel.value as 'high' | 'medium' | 'low'));
+      gq.append(gsel);
+      card.append(gq);
       const save = h('button', 'big-btn', '💾 Save game');
       save.addEventListener('click', () => { g.save(); this.toast('Game saved!'); close(); });
       const reset = h('button', 'big-btn danger', '🔄 Start a new town');

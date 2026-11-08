@@ -4,10 +4,15 @@ import {
   VILLAGER_TIME, BASE_CARRY, costText, type BType, type Cost, type Res, type Subject,
 } from './data';
 import {
-  animateDeer, animateVillager, makeBerryBush, makeBuilding, makeCarcass, makeDeer, makeGhost, makeRock, makeStump,
-  makeTree, makeVillager, mat, setBuildProgress, setGhostValid, setVillagerBundle, setVillagerTool, type VillagerAnim,
+  animateDeer, makeBerryBush, makeBuilding, makeCarcass, makeDeer, makeGhost, makeRock, makeStump,
+  makeTree, mat, setBuildProgress, setGhostValid,
 } from './models';
-import { bake, ChunkMerger } from './bake';
+import { ChunkMerger, windMaterial } from './bake';
+import { atlasMaterial, makeBundle, makeCharacter, makeTool, playAnim, type Character, type ToolName } from './assets';
+import { FX, loadQuality } from './fx';
+import { U } from './uniforms';
+
+type VillagerAnim = 'idle' | 'walk' | 'run' | 'chop' | 'mine' | 'pick' | 'build';
 import { Grid, MAP, Terrain, tileToWorld, worldToTile } from './world';
 import { RTSCamera } from './camera';
 import { mulberry32, randInt } from './util';
@@ -38,6 +43,7 @@ export type Task =
 export interface Villager {
   id: number; pos: THREE.Vector3; mesh: THREE.Group; ring: THREE.Mesh; path: THREE.Vector3[]; task: Task;
   carry: { res: Res | null; amt: number }; job: Res | null; selected: boolean; anim: VillagerAnim; t: number;
+  ch: Character; tool: ToolName | null; toolObj: THREE.Object3D | null; bundle: THREE.Object3D | null; bundleRes: Res | null; cheer: number; fxT: number;
   offset: THREE.Vector2; farmSpot: THREE.Vector3 | null; stuck: number;
 }
 
@@ -63,7 +69,13 @@ export class Game {
   terrain!: Terrain;
   grid = new Grid();
   root = new THREE.Group(); // everything that belongs to the current game
-  trees = new ChunkMerger(this.root);
+  trees!: ChunkMerger;
+  fx!: FX;
+  hemi!: THREE.HemisphereLight;
+  falling: { obj: THREE.Object3D; t: number; axis: THREE.Vector3 }[] = [];
+  chimneys: { b: number; pos: THREE.Vector3 }[] = [];
+  private smokeT = 0;
+  private wearT = 0;
 
   nodes = new Map<number, ResNode>();
   nodeAt = new Map<number, number>(); // tile index -> node id
@@ -114,7 +126,8 @@ export class Game {
     this.rts = new RTSCamera(container.clientWidth / container.clientHeight);
     this.scene.background = new THREE.Color(0x9fd3f5);
     this.scene.fog = new THREE.Fog(0x9fd3f5, 55, 130);
-    this.scene.add(new THREE.HemisphereLight(0xcfe8ff, 0x5d7b3a, 1.1));
+    this.hemi = new THREE.HemisphereLight(0xcfe8ff, 0x5d7b3a, 1.1);
+    this.scene.add(this.hemi);
     this.sun = new THREE.DirectionalLight(0xfff0d0, 2.4);
     this.sun.castShadow = true;
     this.sun.shadow.mapSize.set(2048, 2048);
@@ -122,6 +135,8 @@ export class Game {
     this.sun.shadow.normalBias = 0.02;
     this.scene.add(this.sun, this.sun.target);
     this.scene.add(this.root);
+    this.trees = new ChunkMerger(this.root, windMaterial(atlasMaterial, U.time));
+    this.fx = new FX(this.renderer, this.scene, this.rts.cam, this.sun, this.hemi, loadQuality());
 
     const outlineGeo = new THREE.BufferGeometry().setFromPoints([
       new THREE.Vector3(-0.5, 0, -0.5), new THREE.Vector3(0.5, 0, -0.5), new THREE.Vector3(0.5, 0, 0.5), new THREE.Vector3(-0.5, 0, 0.5),
@@ -146,6 +161,7 @@ export class Game {
     this.renderer.setSize(w, h);
     this.rts.cam.aspect = w / h;
     this.rts.cam.updateProjectionMatrix();
+    this.fx.resize(w, h);
   }
 
   // ======================= world setup =======================
@@ -154,6 +170,9 @@ export class Game {
     this.root.clear();
     this.nodes.clear(); this.nodeAt.clear(); this.buildings.clear(); this.villagers.clear(); this.animals.clear();
     this.stumps = [];
+    this.falling = [];
+    this.chimneys = [];
+    this.fx.lights = [];
     this.grid = new Grid();
     this.selectedBuilding = null;
     this.cancelPlacement();
@@ -162,7 +181,12 @@ export class Game {
   private setupTerrain(seed: number) {
     this.seed = seed;
     this.terrain = new Terrain(seed);
-    this.root.add(this.terrain.mesh, this.terrain.waterMesh, this.terrain.decor);
+    this.root.add(this.terrain.mesh, this.terrain.waterMesh, this.terrain.decor, this.terrain.scenery);
+    this.fx.waterTiles = [];
+    for (let j = 2; j < MAP - 2; j++)
+      for (let i = 2; i < MAP - 2; i++)
+        if (this.terrain.isWater(i, j) && this.terrain.isWater(i + 1, j) && this.terrain.isWater(i - 1, j) && this.terrain.isWater(i, j + 1) && this.terrain.isWater(i, j - 1))
+          this.fx.waterTiles.push([i, j]);
     for (let j = 0; j < MAP; j++)
       for (let i = 0; i < MAP; i++) if (this.terrain.isWater(i, j) || i === 0 || j === 0 || i === MAP - 1 || j === MAP - 1) this.grid.set(i, j, true);
     this.addBorderForest();
@@ -259,14 +283,14 @@ export class Game {
   addNode(kind: NodeKind, i: number, j: number, amount?: number, id?: number) {
     const rnd = mulberry32(i * 1000 + j + this.seed);
     let model: THREE.Object3D;
-    if (kind === 'tree') model = bake(makeTree(rnd));
-    else if (kind === 'stone' || kind === 'gold') model = bake(makeRock(kind, rnd));
+    if (kind === 'tree') model = makeTree(rnd);
+    else if (kind === 'stone' || kind === 'gold') model = makeRock(kind, rnd);
     else if (kind === 'berry') model = makeBerryBush(rnd);
     else model = makeCarcass();
     const x = tileToWorld(i), z = tileToWorld(j);
     model.position.set(x + (rnd() - 0.5) * 0.2, this.terrain.heightAt(x, z), z + (rnd() - 0.5) * 0.2);
     if (kind === 'carcass') model.rotation.y = rnd() * 6;
-    if (kind === 'tree') this.trees.add(model as THREE.Mesh); // merged with nearby trees
+    if (kind === 'tree') this.trees.add(model); // merged with nearby trees
     else this.root.add(model);
     const n: ResNode = { id: id ?? this.nextId++, kind, res: NODE_RES[kind], i, j, amount: amount ?? NODE_AMOUNT[kind], max: NODE_AMOUNT[kind], mesh: model, shake: 0 };
     this.nodes.set(n.id, n);
@@ -288,9 +312,21 @@ export class Game {
     }
   }
 
-  removeNode(n: ResNode) {
-    if (n.kind === 'tree' && this.trees.has(n.mesh as THREE.Mesh)) this.trees.remove(n.mesh as THREE.Mesh);
+  removeNode(n: ResNode, felledBy?: THREE.Vector3) {
+    if (n.kind === 'tree' && this.trees.has(n.mesh)) this.trees.remove(n.mesh);
     this.root.remove(n.mesh);
+    if (n.kind === 'tree' && felledBy) {
+      // timber! the tree tips over away from the villager
+      const away = new THREE.Vector3().subVectors(n.mesh.position, felledBy).setY(0).normalize();
+      const axis = new THREE.Vector3(away.z, 0, -away.x);
+      const pivot = new THREE.Group();
+      pivot.position.copy(n.mesh.position);
+      const t = n.mesh;
+      t.position.set(0, 0, 0);
+      pivot.add(t);
+      this.root.add(pivot);
+      this.falling.push({ obj: pivot, t: 0, axis });
+    }
     this.nodes.delete(n.id);
     if (this.nodeAt.get(n.j * MAP + n.i) === n.id) {
       this.nodeAt.delete(n.j * MAP + n.i);
@@ -300,7 +336,7 @@ export class Game {
   }
 
   addStump(i: number, j: number) {
-    const s = makeStump();
+    const s = makeStump(mulberry32(i * 31 + j));
     const x = tileToWorld(i), z = tileToWorld(j);
     s.position.set(x, this.terrain.heightAt(x, z), z);
     this.root.add(s);
@@ -321,7 +357,33 @@ export class Game {
     // clear stumps under the building
     this.stumps = this.stumps.filter(([si, sj]) => !(si >= i && si < i + def.size && sj >= j && sj < j + def.size));
     setBuildProgress(mesh, b.progress, built);
+    // worn ground around buildings
+    for (let jj = j - 1; jj <= j + def.size; jj++)
+      for (let ii = i - 1; ii <= i + def.size; ii++) {
+        const inside = ii >= i && ii < i + def.size && jj >= j && jj < j + def.size;
+        if (type !== 'farm') this.terrain.addWear(ii, jj, inside ? 1 : 0.45);
+      }
+    this.terrain.refreshWear(0);
+    if (type === 'house') this.chimneys.push({ b: b.id, pos: this.highestPoint(mesh.userData.main) });
+    if (type !== 'farm') this.fx.lights.push(new THREE.Vector3(cx + def.size * 0.3, h + 0.7, cz + def.size / 2 + 0.15));
     return b;
+  }
+
+  /** Top of a model (used to find house chimneys) */
+  private highestPoint(obj: THREE.Object3D) {
+    obj.updateMatrixWorld(true);
+    let best = new THREE.Vector3(0, -Infinity, 0);
+    const v = new THREE.Vector3();
+    obj.traverse((o) => {
+      const me = o as THREE.Mesh;
+      if (!me.isMesh) return;
+      const pos = me.geometry.getAttribute('position');
+      for (let k = 0; k < pos.count; k++) {
+        v.fromBufferAttribute(pos, k).applyMatrix4(me.matrixWorld);
+        if (v.y > best.y) best = v.clone();
+      }
+    });
+    return best;
   }
 
   buildingAtTile(i: number, j: number) {
@@ -345,7 +407,8 @@ export class Game {
   }
 
   spawnVillager(x: number, z: number, job: Res | null, id?: number) {
-    const mesh = makeVillager();
+    const ch = makeCharacter(Math.random() < 0.5 ? 'rogue' : 'rogue_hooded', Math.floor(Math.random() * 6));
+    const mesh = ch.root;
     const ring = new THREE.Mesh(new THREE.RingGeometry(0.22, 0.3, 20), new THREE.MeshBasicMaterial({ color: 0x66ff88, transparent: true, opacity: 0.9, depthWrite: false }));
     ring.rotation.x = -Math.PI / 2;
     ring.visible = false;
@@ -354,6 +417,7 @@ export class Game {
       id: id ?? this.nextId++, pos: new THREE.Vector3(x, this.terrain.heightAt(x, z), z), mesh, ring, path: [], task: { k: 'idle' },
       carry: { res: null, amt: 0 }, job, selected: false, anim: 'idle', t: Math.random() * 10,
       offset: new THREE.Vector2((Math.random() - 0.5) * 0.4, (Math.random() - 0.5) * 0.4), farmSpot: null, stuck: 0,
+      ch, tool: null, toolObj: null, bundle: null, bundleRes: null, cheer: 0, fxT: Math.random(),
     };
     this.villagers.set(v.id, v);
     if (job) this.autoJob(v, job);
@@ -739,12 +803,13 @@ export class Game {
     this.res[r] += added;
     this.stats.collected[r] += added;
     if (added > 0) this.floatText(v.pos, `+${added} ${RES_ICON[r]}`);
+    if (added > 0 && r === 'gold') this.fx.sparkle(v.pos.clone().setY(v.pos.y + 0.6), 5);
     if (added < amt && this.storageWarnT <= 0) {
       this.ui.toast(`Your ${r} storage is full! Spend some, or build a Storehouse 📦.`, true);
       this.storageWarnT = 25;
     }
     v.carry = { res: null, amt: 0 };
-    setVillagerBundle(v.mesh, null, 0);
+    this.setBundle(v, null);
   }
 
   /** Walk to the nearest drop site. Returns true when dropped off. */
@@ -765,7 +830,7 @@ export class Game {
     const speed = VILLAGER_SPEED * (hungry ? 0.75 : 1);
     const moving = this.stepPath(v, dt, speed);
     let anim: VillagerAnim = moving ? 'walk' : 'idle';
-    let tool: Parameters<typeof setVillagerTool>[1] = null;
+    let tool: ToolName | null = null;
     const task = v.task;
 
     switch (task.k) {
@@ -815,12 +880,12 @@ export class Game {
         const take = Math.min(n.amount, this.rate(kind) * dt);
         n.amount -= take;
         n.shake = 0.25;
-        if (n.kind === 'tree' && this.trees.has(n.mesh as THREE.Mesh)) { this.trees.remove(n.mesh as THREE.Mesh); this.root.add(n.mesh); }
+        if (n.kind === 'tree' && this.trees.has(n.mesh)) { this.trees.remove(n.mesh); this.root.add(n.mesh); }
         v.carry.res = n.res;
         v.carry.amt += take;
-        setVillagerBundle(v.mesh, n.res, v.carry.amt);
+        this.setBundle(v, n.res);
         this.updateNodeLook(n);
-        if (n.amount <= 0.01) this.removeNode(n);
+        if (n.amount <= 0.01) this.removeNode(n, v.pos);
         if (v.carry.amt >= this.carryCap()) { v.carry.amt = this.carryCap(); task.stage = 'drop'; }
         break;
       }
@@ -850,7 +915,7 @@ export class Game {
         tool = 'basket';
         v.carry.res = 'food';
         v.carry.amt += this.rate('farm') * dt;
-        setVillagerBundle(v.mesh, 'food', v.carry.amt);
+        this.setBundle(v, 'food');
         if (v.carry.amt >= this.carryCap()) { v.carry.amt = this.carryCap(); task.stage = 'drop'; }
         break;
       }
@@ -870,6 +935,7 @@ export class Game {
           for (const o of this.villagers.values()) if (o.task.k === 'hunt' && o.task.a === a.id) this.commandGather(o, n);
           break;
         }
+        if (moving) anim = 'run';
         task.repath -= dt;
         if (task.repath <= 0 || !moving) {
           task.repath = 1;
@@ -903,12 +969,28 @@ export class Game {
         break;
     }
 
-    if (moving && anim === 'idle') anim = 'walk';
-    if (moving) anim = 'walk';
+    if (moving && anim !== 'run') anim = 'walk';
     v.anim = anim;
     if (!tool && v.task.k === 'build') tool = 'hammer';
-    setVillagerTool(v.mesh, tool);
+    this.setTool(v, tool);
     v.t += dt;
+    // little bits fly while they work
+    if (anim !== 'walk' && anim !== 'idle' && anim !== 'run') {
+      v.fxT -= dt;
+      if (v.fxT <= 0) {
+        v.fxT = 0.75;
+        const p = v.pos.clone().add(new THREE.Vector3(Math.sin(v.mesh.rotation.y) * 0.45, 0.45, Math.cos(v.mesh.rotation.y) * 0.45));
+        if (anim === 'chop') this.fx.chips(p, 0xa8743f, 3);
+        else if (anim === 'mine') {
+          const n = v.task.k === 'gather' ? this.nodes.get(v.task.node) : undefined;
+          if (n?.kind === 'gold') this.fx.sparkle(p, 3); else this.fx.chips(p, 0x9a9a9a, 3);
+        } else if (anim === 'build') this.fx.chips(p, 0xc9a06a, 2);
+      }
+    }
+    if (moving) {
+      this.wearT += dt;
+      this.terrain.addWear(worldToTile(v.pos.x), worldToTile(v.pos.z), dt * 0.03);
+    }
   }
 
   private retarget(v: Villager, avoid?: number) {
@@ -939,6 +1021,9 @@ export class Game {
     const def = BUILDINGS[b.type];
     this.markGoal(b.type);
     this.ui.toast(`${def.emoji} The ${def.name} is finished!`, true);
+    this.fx.puff(b.mesh.position.clone().setY(b.mesh.position.y + 0.3), 0xd6c4a3, 26, 0.7);
+    this.fx.confetti(b.mesh.position.clone().setY(b.mesh.position.y + 1.5));
+    for (const v of this.villagers.values()) if (v.task.k === 'build' && v.task.b === b.id) v.cheer = 1.6;
     if (b.type === 'farm') {
       const builder = [...this.villagers.values()].find((v) => v.task.k === 'build' && v.task.b === b.id);
       if (builder) this.commandFarm(builder, b);
@@ -985,7 +1070,7 @@ export class Game {
           const v = this.spawnVillagerAtTC(q.job);
           this.stats.trained++;
           this.markGoal('train');
-          if (v) this.floatText(v.pos, '👋 New villager!');
+          if (v) { this.floatText(v.pos, '👋 New villager!'); this.fx.puff(v.pos.clone(), 0xe8dcc4, 10, 0.35); v.cheer = 1.4; }
           this.ui.toast('👋 A new villager is ready to work!', true);
           this.ui.refreshSelection();
         }
@@ -1079,7 +1164,7 @@ export class Game {
     for (const v of this.villagers.values()) {
       v.pos.y = this.terrain.heightAt(v.pos.x, v.pos.z);
       v.mesh.position.copy(v.pos);
-      animateVillager(v.mesh, this.paused ? 'idle' : v.anim, v.t);
+      this.animateVillager(v, dt);
       v.ring.visible = v.selected;
       if (v.selected) v.ring.position.set(v.pos.x, v.pos.y + 0.03, v.pos.z);
     }
@@ -1089,10 +1174,49 @@ export class Game {
         n.mesh.rotation.z = Math.sin(this.clock * 40) * 0.025 * (n.shake > 0 ? 1 : 0);
       }
     }
-    const tc = this.townCenter();
-    if (tc) {
-      const flag = (tc.mesh.userData.model as THREE.Group).userData.flag as THREE.Group | undefined;
-      if (flag) flag.rotation.y = Math.sin(this.clock * 2) * 0.3;
+    // falling trees
+    this.falling = this.falling.filter((f) => {
+      f.t += dt;
+      const fallT = Math.min(1, f.t / 1.1);
+      f.obj.quaternion.setFromAxisAngle(f.axis, (Math.PI / 2) * fallT * fallT);
+      if (f.t >= 1.1 && !f.obj.userData.landed) {
+        f.obj.userData.landed = true;
+        const p = f.obj.position.clone();
+        const dir = new THREE.Vector3(0, 1, 0).applyQuaternion(f.obj.quaternion);
+        this.fx.leaves(p.addScaledVector(dir, 0.9));
+        this.fx.puff(f.obj.position.clone().addScaledVector(dir, 0.5), 0xbfae8e, 8, 0.4);
+      }
+      if (f.t > 1.6) f.obj.position.y -= dt * 0.6;
+      if (f.t > 2.6) { this.root.remove(f.obj); return false; }
+      return true;
+    });
+    // chimney smoke
+    this.smokeT -= dt;
+    if (this.smokeT <= 0) {
+      this.smokeT = this.fx.quality === 'low' ? 0.9 : 0.45;
+      const t = this.rts.target;
+      for (const c of this.chimneys) {
+        const b = this.buildings.get(c.b);
+        if (!b?.built || Math.abs(c.pos.x - t.x) > 28 || Math.abs(c.pos.z - t.z) > 28) continue;
+        this.fx.smokeFrom(c.pos);
+      }
+    }
+    // farm crops shrink as they are harvested, then grow back
+    for (const b of this.buildings.values()) {
+      if (b.type !== 'farm' || !b.built) continue;
+      const crops = b.mesh.userData.crops as THREE.Object3D;
+      const farmer = b.farmer !== null ? this.villagers.get(b.farmer) : undefined;
+      const want = farmer && farmer.task.k === 'farm' ? 1 - 0.6 * Math.min(1, farmer.carry.amt / this.carryCap()) : 1;
+      const cur = b.mesh.userData.cropH ?? 1;
+      const next = cur + (want - cur) * Math.min(1, dt * 2);
+      b.mesh.userData.cropH = next;
+      crops.scale.y = next;
+    }
+    // worn paths update a couple of times a second
+    this.wearT += dt;
+    if (this.wearT > 0.5) {
+      this.wearT = 0;
+      this.terrain.refreshWear(this.paused ? 0 : 0.0012);
     }
     // selection outline
     const sb = this.selectedBuilding !== null ? this.buildings.get(this.selectedBuilding) : null;
@@ -1101,10 +1225,9 @@ export class Game {
       this.selOutline.position.set(sb.mesh.position.x, sb.mesh.position.y + 0.05, sb.mesh.position.z);
       this.selOutline.scale.set(sb.size + 0.1, 1, sb.size + 0.1);
     }
-    // sun follows the camera so shadows stay sharp
-    const t = this.rts.target;
-    this.sun.position.set(t.x + 14, 26, t.z + 9);
-    this.sun.target.position.set(t.x, 0, t.z);
+    // the sun (and moon) follow the camera so shadows stay sharp
+    this.fx.update(dt, this.paused, this.rts.target, (x, z) => this.terrain.heightAt(x, z));
+    ((this.terrain.waterMesh.material as THREE.ShaderMaterial).uniforms.sunDir.value as THREE.Vector3).copy(this.fx.sunDir);
     const ext = Math.max(14, Math.min(42, this.rts.dist * 0.95));
     const sc = this.sun.shadow.camera;
     if (sc.right !== ext) {
@@ -1134,7 +1257,50 @@ export class Game {
   }
 
   render() {
-    this.renderer.render(this.scene, this.rts.cam);
+    this.fx.render();
+  }
+
+  // ======================= villager looks =======================
+  private animateVillager(v: Villager, dt: number) {
+    const ch = v.ch;
+    if (v.cheer > 0) {
+      v.cheer -= dt;
+      playAnim(ch, 'Cheer', 0.15);
+    } else {
+      const a = this.paused ? 'idle' : v.anim;
+      const clip = { idle: 'Idle', walk: 'Walking_A', run: 'Running_A', chop: '1H_Melee_Attack_Chop', mine: '1H_Melee_Attack_Chop', build: '1H_Melee_Attack_Chop', pick: 'Interact' }[a];
+      const speed = a === 'walk' ? (this.res.food <= 0 ? 0.8 : 1.05) : a === 'chop' ? 0.85 : a === 'mine' ? 0.75 : a === 'build' ? 1.15 : 1;
+      playAnim(ch, clip, 0.2, speed);
+    }
+    ch.mixer.update(this.paused ? dt * 0.5 : dt);
+  }
+
+  private setTool(v: Villager, tool: ToolName | null) {
+    if (v.cheer > 0) tool = null;
+    if (v.tool === tool) return;
+    v.toolObj?.parent?.remove(v.toolObj);
+    v.toolObj = null;
+    v.tool = tool;
+    if (!tool) return;
+    const t = makeTool(tool);
+    if (tool === 'basket') {
+      v.ch.handL.add(t);
+    } else {
+      v.ch.handR.add(t);
+    }
+    v.toolObj = t;
+  }
+
+  private setBundle(v: Villager, res: Res | null) {
+    if (v.bundleRes === res) return;
+    if (v.bundle) v.ch.back.remove(v.bundle);
+    v.bundle = null;
+    v.bundleRes = res;
+    if (!res) return;
+    const b = makeBundle(res);
+    b.position.set(0, 0.25, -0.55);
+    v.ch.back.add(b);
+    v.bundle = b;
   }
 
   // ======================= input =======================
@@ -1374,7 +1540,7 @@ export class Game {
       const nv = this.spawnVillager(v.x, v.z, null, v.id);
       nv.job = v.job;
       nv.carry = v.carry ?? { res: null, amt: 0 };
-      setVillagerBundle(nv.mesh, nv.carry.res, nv.carry.amt);
+      this.setBundle(nv, nv.carry.amt > 0 ? nv.carry.res : null);
       const t = v.task as Task;
       if (t && (t.k === 'gather' || t.k === 'farm' || t.k === 'build' || t.k === 'dropoff')) nv.task = t;
       else if (t && t.k === 'hunt') nv.task = { k: 'hunt', a: t.a, repath: 0 };

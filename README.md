@@ -21,5 +21,13 @@ See [DESIGN.md](DESIGN.md) for the full game design and build phases.
 ## Turning on GitHub Pages (one time)
 Repo **Settings → Pages → Build and deployment → Source: GitHub Actions**. Every push to `main` then rebuilds the game.
 
+## Graphics
+The ⚙️ menu has a **Graphics** setting (High / Medium / Low). High adds soft ambient-occlusion shadows and glow.
+If the game runs slowly it steps the setting down by itself.
+
 ## Tech
 Vite + TypeScript + Three.js. Saves are kept in the browser on that computer (localStorage).
+
+## Credits
+3D models: **KayKit** packs by Kay Lousberg (www.kaylousberg.com) — Character Pack: Adventurers and Medieval Hexagon Pack, CC0.
+License files are in `public/models/`. `tools/build-assets.mjs` shows how the original files were trimmed and compressed.
