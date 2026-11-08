@@ -1,10 +1,15 @@
 import * as THREE from 'three';
-import { BUILDINGS, SAM_MAX_LEVEL, SCOUT_COST, SCOUT_TIME, SOLDIER_COST, SOLDIER_TIME, samUpgradeCost, type Res } from './data';
-import { CHAR_SCALE, makeCharacter, model, playAnim, type Character } from './assets';
+import { ARCHER_COST, ARCHER_TIME, BUILDINGS, RIDER_COST, RIDER_TIME, SAM_MAX_LEVEL, SCOUT_COST, SCOUT_TIME, SOLDIER_COST, SOLDIER_TIME, samUpgradeCost, type Res } from './data';
+import { CHAR_SCALE, makeCharacter, model, playAnim, splitClip, type Character } from './assets';
+import { animateQuad, makeHorse, type Quad } from './animals';
+import { AGE_COLOR } from './models';
 import { MAP, tileToWorld, worldToTile } from './world';
 import type { Building, Game, Villager } from './game';
 
-export type UnitKind = 'soldier' | 'scout' | 'raider' | 'sam';
+export type UnitKind = 'soldier' | 'scout' | 'raider' | 'sam' | 'archer' | 'rider';
+/** our own fighting units */
+export const MILITARY: UnitKind[] = ['soldier', 'archer', 'rider'];
+export const isMine = (k: UnitKind) => k === 'soldier' || k === 'scout' || k === 'archer' || k === 'rider';
 export interface Unit {
   id: number;
   kind: UnitKind;
@@ -27,6 +32,9 @@ export interface Unit {
   anim: string;
   cheer: number;
   blockT: number;
+  horse: Quad | null;
+  lastPos: THREE.Vector3;
+  speedNow: number;
 }
 
 const STATS: Record<UnitKind, { hp: number; speed: number; dmg: number; every: number; sight: number }> = {
@@ -34,7 +42,10 @@ const STATS: Record<UnitKind, { hp: number; speed: number; dmg: number; every: n
   scout: { hp: 35, speed: 3.0, dmg: 0, every: 1, sight: 6 },
   raider: { hp: 40, speed: 2.0, dmg: 6, every: 1.3, sight: 0 },
   sam: { hp: 9999, speed: 3.2, dmg: 40, every: 1.0, sight: 6 },
+  archer: { hp: 45, speed: 2.3, dmg: 7, every: 1.4, sight: 6 },
+  rider: { hp: 110, speed: 3.6, dmg: 12, every: 1.0, sight: 6 },
 };
+const RANGE: Partial<Record<UnitKind, number>> = { archer: 5.5 };
 
 const FIRST_RAID = 480; // seconds of play before the first raid
 const RAID_GAP = 420;
@@ -50,7 +61,7 @@ export class Combat {
   samLevel = 1;
   sam: Unit | null = null;
   bell = false;
-  arrows: { mesh: THREE.Object3D; from: THREE.Vector3; to: THREE.Vector3; t: number; dur: number; target: number }[] = [];
+  arrows: { mesh: THREE.Object3D; from: THREE.Vector3; to: THREE.Vector3; t: number; dur: number; target: number; dmg: number }[] = [];
   towerT = new Map<number, number>();
   private bars = new Map<string, THREE.Group>();
   private barGeo = new THREE.PlaneGeometry(1, 1);
@@ -75,10 +86,10 @@ export class Combat {
 
   // ------------------------------------------------------------ units
   spawn(kind: UnitKind, x: number, z: number, id?: number): Unit {
-    const charKind = kind === 'raider' ? 'barbarian' : kind === 'scout' ? 'rogue_hooded' : 'knight';
-    const ch = makeCharacter(charKind, kind === 'scout' ? 3 : 0);
+    const charKind = kind === 'raider' ? 'barbarian' : kind === 'scout' ? 'rogue_hooded' : kind === 'archer' ? 'archer' : 'knight';
+    const ch = makeCharacter(charKind, kind === 'scout' ? 3 : kind === 'archer' ? 5 : 0);
     const st = STATS[kind];
-    if (kind === 'soldier' || kind === 'sam') {
+    if (kind === 'soldier' || kind === 'sam' || kind === 'rider') {
       const sword = model('sword_1handed');
       ch.handR.add(sword);
       const shield = model(kind === 'sam' ? 'shield_badge_color' : 'shield_round_color');
@@ -94,16 +105,37 @@ export class Combat {
       ch.back.add(flag);
     }
     if (kind === 'sam') this.dressSam(ch);
+    // riders sit on a horse
+    let horse: Quad | null = null;
+    let mesh = ch.root;
+    if (kind === 'rider') {
+      horse = makeHorse(Math.random, AGE_COLOR.blanket[Math.min(this.g.age, 3) - 1]);
+      horse.root.rotation.y = -Math.PI / 2; // horse faces +x; units face +z
+      const seat = new THREE.Group();
+      seat.position.set(0.02, 0.06, 0);
+      seat.rotation.y = Math.PI / 2;
+      seat.add(ch.root.children[0]);
+      horse.body.add(seat);
+      mesh = new THREE.Group();
+      mesh.add(horse.root);
+      // legs sit, arms fight
+      const lower = ch.mixer.clipAction(splitClip('Sit_Chair_Idle', 'lower'));
+      lower.play();
+      ch.actions.forEach((a) => a.stop());
+      const up = (n: string) => ch.mixer.clipAction(splitClip(n, 'upper'));
+      mesh.userData.rider = { idle: up('Idle'), attack: up('1H_Melee_Attack_Slice_Diagonal'), cheer: up('Cheer'), cur: '' };
+      ch.root = mesh;
+    }
     const ring = new THREE.Mesh(new THREE.RingGeometry(0.24, 0.32, 20), new THREE.MeshBasicMaterial({ color: kind === 'raider' ? 0xff5555 : 0x66ccff, transparent: true, opacity: 0.9, depthWrite: false }));
     ring.rotation.x = -Math.PI / 2;
     ring.visible = false;
-    this.g.root.add(ch.root, ring);
+    this.g.root.add(mesh, ring);
     const pos = new THREE.Vector3(x, this.g.terrain.heightAt(x, z), z);
-    ch.root.position.copy(pos);
+    mesh.position.copy(pos);
     const hp = kind === 'raider' ? st.hp + this.wave * 6 : st.hp;
     const u: Unit = {
-      id: id ?? this.g.nextId++, kind, pos, mesh: ch.root, ch, ring, path: [], offset: new THREE.Vector2((Math.random() - 0.5) * 0.5, (Math.random() - 0.5) * 0.5),
-      hp, maxHp: hp, selected: false, order: kind === 'scout' ? 'explore' : 'idle', target: null, home: kind === 'soldier' ? pos.clone() : null,
+      id: id ?? this.g.nextId++, kind, pos, mesh, ch, ring, horse, lastPos: pos.clone(), speedNow: 0, path: [], offset: new THREE.Vector2((Math.random() - 0.5) * 0.5, (Math.random() - 0.5) * 0.5),
+      hp, maxHp: hp, selected: false, order: kind === 'scout' ? 'explore' : 'idle', target: null, home: MILITARY.includes(kind) ? pos.clone() : null,
       atkT: Math.random(), scanT: Math.random() * 0.4, repathT: 0, dying: 0, anim: '', cheer: 0, blockT: 0,
     };
     this.units.set(u.id, u);
@@ -169,6 +201,23 @@ export class Combat {
     g.ui.refreshSelection();
   }
 
+  async trainArcher(b: Building) {
+    await this.trainUnit(b, 'archer', 'Train an archer', ARCHER_COST);
+  }
+
+  async trainRider(b: Building) {
+    await this.trainUnit(b, 'rider', 'Train a rider', RIDER_COST);
+  }
+
+  private async trainUnit(b: Building, kind: 'archer' | 'rider', title: string, cost: typeof ARCHER_COST) {
+    const g = this.g;
+    if (g.popUsed() >= g.popCap()) { g.ui.toast('Your town is full! Build a House to make room.', true); return; }
+    if (b.queue.length >= 5) { g.ui.toast('This building is busy. Wait a little.', true); return; }
+    const ok = await g.tryWithQuestion('math', title, cost);
+    if (ok) b.queue.push({ job: null, t: 0, kind });
+    g.ui.refreshSelection();
+  }
+
   async trainScout(tc: Building) {
     const g = this.g;
     if (g.popUsed() >= g.popCap()) { g.ui.toast('Your town is full! Build a House to make room.', true); return; }
@@ -179,7 +228,7 @@ export class Combat {
   }
 
   queueTime(kind: string | undefined) {
-    return kind === 'soldier' ? SOLDIER_TIME : kind === 'scout' ? SCOUT_TIME : 0;
+    return kind === 'soldier' ? SOLDIER_TIME : kind === 'scout' ? SCOUT_TIME : kind === 'archer' ? ARCHER_TIME : kind === 'rider' ? RIDER_TIME : 0;
   }
 
   async upgradeSam() {
@@ -213,7 +262,7 @@ export class Combat {
       u.selected = false;
       u.path = [];
       playAnim(u.ch, 'Death_A', 0.1);
-      if (u.kind !== 'raider') this.g.ui.toast(u.kind === 'soldier' ? '🛡️ A soldier was knocked out.' : '🧭 A scout was knocked out.');
+      if (u.kind !== 'raider') this.g.ui.toast({ soldier: '🛡️ A soldier', scout: '🧭 A scout', archer: '🏹 An archer', rider: '🐴 A rider', sam: '', raider: '' }[u.kind] + ' was knocked out.');
     }
   }
 
@@ -278,8 +327,10 @@ export class Combat {
     g.stats.raidsDefended = (g.stats.raidsDefended ?? 0) + 1;
     g.markGoal('defend');
     g.ui.toast(`🎉 You defended your town! The raiders dropped ${loot} 🪙 gold.`, true);
+    // everyone who ran inside comes back out to work
     if (this.bell) this.ringBell(false);
-    for (const u of this.alive('soldier')) u.cheer = 2;
+    else g.unhideAll();
+    for (const u of this.alive()) if (MILITARY.includes(u.kind)) u.cheer = 2;
     if (this.sam) { this.sam.cheer = 2.2; this.sam.order = 'home'; }
   }
 
@@ -368,7 +419,8 @@ export class Combat {
   private moveToward(u: Unit, x: number, z: number) {
     if (u.repathT <= 0 || !u.path.length) {
       u.repathT = 0.7;
-      this.g.pathTo(u, worldToTile(x), worldToTile(z));
+      // if there is no path (blocked in), walk straight at the target instead of getting stuck
+      if (!this.g.pathTo(u, worldToTile(x), worldToTile(z))) u.path = [new THREE.Vector3(x, 0, z)];
     }
   }
 
@@ -379,6 +431,7 @@ export class Combat {
     u.blockT -= dt;
     if (u.dying) {
       u.dying -= dt;
+      if (u.horse) u.mesh.rotation.z = Math.min(Math.PI / 2.2, u.mesh.rotation.z + dt * 3);
       if (u.dying < 0.8) u.pos.y -= dt * 0.5;
       if (u.dying <= 0) this.removeUnit(u);
       return;
@@ -389,7 +442,7 @@ export class Combat {
       return;
     }
     const st = STATS[u.kind];
-    const speed = st.speed * (u.kind === 'sam' ? 1 + this.samLevel * 0.06 : 1);
+    const speed = st.speed * (u.kind === 'sam' ? 1 + this.samLevel * 0.06 : u.kind === 'rider' && g.research.has('horseshoes') ? 1.2 : 1);
     const moving = g.stepPath(u, dt, speed);
     let anim = moving ? (u.kind === 'raider' || u.order === 'attack' || u.kind === 'sam' ? 'Running_A' : 'Walking_A') : 'Idle';
 
@@ -399,7 +452,7 @@ export class Combat {
         if (t) g.pathTo(u, t[0], t[1]);
         else { u.order = 'idle'; g.ui.toast('🧭 Your scout has explored everywhere it can reach!'); }
       } else if (u.order === 'move' && !moving) u.order = 'idle';
-    } else if (u.kind === 'soldier' || u.kind === 'sam') {
+    } else if (MILITARY.includes(u.kind) || u.kind === 'sam') {
       if (u.order === 'move') {
         if (!moving) { u.order = 'idle'; u.home = u.pos.clone(); }
       } else if (u.order === 'home' && u.kind === 'sam') {
@@ -419,20 +472,30 @@ export class Combat {
         if (target && target.dying) target = undefined;
         if (!target && u.scanT <= 0) {
           u.scanT = 0.4;
-          const range = u.kind === 'sam' ? 60 : 7;
+          const range = u.kind === 'sam' ? 60 : u.kind === 'archer' ? 8 : 7;
           const r = this.nearestRaider(u.pos, range) ?? (u.home && u.kind === 'soldier' ? this.nearestRaider(u.home, 9) : null);
           if (r) { u.target = { k: 'unit', id: r.id }; u.order = 'attack'; target = r; }
         }
         if (target) {
           const d = target.pos.distanceTo(u.pos);
-          if (d <= 0.95) {
+          const range = (RANGE[u.kind] ?? 0) + (u.kind === 'archer' && g.research.has('fletching') ? 1 : 0);
+          if (range && d <= range) {
+            // archers shoot from where they stand
+            u.path = [];
+            this.face(u, target.pos);
+            anim = u.atkT < 0.35 ? '1H_Ranged_Shoot' : '1H_Ranged_Aiming';
+            if (u.atkT <= 0) {
+              u.atkT = st.every;
+              this.shoot(u.pos.clone().setY(u.pos.y + 0.7), target, st.dmg + (g.research.has('fletching') ? 3 : 0));
+            }
+          } else if (d <= (u.kind === 'rider' ? 1.15 : 0.95)) {
             u.path = [];
             this.face(u, target.pos);
             anim = u.kind === 'sam' && this.samLevel >= 3 && (u.atkT % 2 < 1) ? '2H_Melee_Attack_Chop' : '1H_Melee_Attack_Slice_Diagonal';
             if (u.atkT <= 0) {
               const every = u.kind === 'sam' ? Math.max(0.45, 1.1 - 0.15 * (this.samLevel - 1)) : st.every;
               u.atkT = every;
-              const dmg = u.kind === 'sam' ? 25 + 15 * this.samLevel : st.dmg;
+              const dmg = u.kind === 'sam' ? 25 + 15 * this.samLevel : st.dmg + (u.kind === 'rider' && g.research.has('horseshoes') ? 4 : 0);
               this.damageUnit(target, dmg);
               if (u.kind === 'sam' && this.samLevel >= 5) g.fx.sparkle(target.pos.clone().setY(target.pos.y + 0.6), 6);
             }
@@ -505,7 +568,13 @@ export class Combat {
         if (u.atkT <= 0) { u.atkT = STATS.raider.every; this.damageBuilding(b, 14 + this.wave * 3); }
         return '1H_Melee_Attack_Chop';
       }
-      if (!moving && u.repathT <= 0) { u.repathT = 1; if (!g.pathToRect(u, b.i, b.j, b.size)) u.target = null; }
+      if (!moving && u.repathT <= 0) {
+        u.repathT = 1;
+        if (!g.pathToRect(u, b.i, b.j, b.size)) {
+          const c = b.mesh.position, d = new THREE.Vector3().subVectors(u.pos, c).setY(0).normalize().multiplyScalar(b.size / 2 + 0.3);
+          u.path = [new THREE.Vector3(c.x + d.x, 0, c.z + d.z)];
+        }
+      }
       return moving ? 'Running_A' : anim;
     }
     const tp = t.k === 'unit' ? this.units.get(t.id) : g.villagers.get(t.id);
@@ -532,14 +601,15 @@ export class Combat {
       this.towerT.set(b.id, t);
       if (t > 0) continue;
       const from = b.mesh.position.clone().setY(b.mesh.position.y + 2.6);
-      const r = this.nearestRaider(b.mesh.position, 7);
+      const fl = this.g.research.has('fletching');
+      const r = this.nearestRaider(b.mesh.position, fl ? 8.5 : 7);
       if (!r) continue;
       this.towerT.set(b.id, 1.4);
-      this.shoot(from, r);
+      this.shoot(from, r, fl ? 16 : 12);
     }
   }
 
-  private shoot(from: THREE.Vector3, target: Unit) {
+  private shoot(from: THREE.Vector3, target: Unit, dmg = 12) {
     const arrow = new THREE.Group();
     const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.015, 0.015, 0.5, 4), new THREE.MeshStandardMaterial({ color: 0x8a5a33 }));
     shaft.rotation.x = Math.PI / 2;
@@ -549,7 +619,7 @@ export class Combat {
     arrow.add(shaft, tip);
     this.g.root.add(arrow);
     const to = target.pos.clone().setY(target.pos.y + 0.5);
-    this.arrows.push({ mesh: arrow, from, to, t: 0, dur: Math.max(0.3, from.distanceTo(to) / 14), target: target.id });
+    this.arrows.push({ mesh: arrow, from, to, t: 0, dur: Math.max(0.3, from.distanceTo(to) / 14), target: target.id, dmg });
   }
 
   private updateArrows(dt: number) {
@@ -563,7 +633,7 @@ export class Combat {
       a.mesh.position.copy(p);
       if (a.t >= 1) {
         this.g.root.remove(a.mesh);
-        if (tgt && !tgt.dying) this.damageUnit(tgt, 12);
+        if (tgt && !tgt.dying) this.damageUnit(tgt, a.dmg);
         return false;
       }
       return true;
@@ -577,7 +647,21 @@ export class Combat {
       u.pos.y = u.dying && u.dying < 0.8 ? u.pos.y : this.g.terrain.heightAt(u.pos.x, u.pos.z);
       u.mesh.position.copy(u.pos);
       const speed = u.kind === 'sam' ? 1 + this.samLevel * 0.08 : 1;
-      if (!u.dying) playAnim(u.ch, paused ? 'Idle' : u.anim || 'Idle', 0.15, speed);
+      if (u.horse) {
+        // horse legs follow how fast the rider is going
+        const moved = u.pos.distanceTo(u.lastPos) / Math.max(dt, 1e-4);
+        u.lastPos.copy(u.pos);
+        u.speedNow += ((paused ? 0 : moved) - u.speedNow) * Math.min(1, dt * 6);
+        if (!u.dying) animateQuad(u.horse, u.speedNow > 0.3 ? 1 + u.speedNow * 0.6 : 0, false, paused ? 0 : dt);
+        const r = u.ch.root.userData.rider;
+        const want = paused ? 'idle' : u.anim === 'Cheer' ? 'cheer' : u.anim.includes('Attack') ? 'attack' : 'idle';
+        if (r.cur !== want && !u.dying) {
+          const next = r[want] as THREE.AnimationAction, prev = r[r.cur] as THREE.AnimationAction | undefined;
+          next.reset().play();
+          if (prev) prev.crossFadeTo(next, 0.15, false);
+          r.cur = want;
+        }
+      } else if (!u.dying) playAnim(u.ch, paused ? 'Idle' : u.anim || 'Idle', 0.15, speed);
       u.ch.mixer.update(paused ? dt * 0.5 : dt);
       u.ring.visible = u.selected;
       if (u.selected) u.ring.position.set(u.pos.x, u.pos.y + 0.03, u.pos.z);
@@ -586,7 +670,7 @@ export class Combat {
     // health bars
     const want = new Map<string, { pos: THREE.Vector3; f: number; w: number }>();
     for (const u of this.units.values()) if (!u.dying && u.kind !== 'sam' && (u.hp < u.maxHp || u.selected || u.kind === 'raider'))
-      want.set('u' + u.id, { pos: u.pos.clone().setY(u.pos.y + 1.15), f: u.hp / u.maxHp, w: 0.6 });
+      want.set('u' + u.id, { pos: u.pos.clone().setY(u.pos.y + (u.kind === 'rider' ? 1.6 : 1.15)), f: u.hp / u.maxHp, w: 0.6 });
     for (const v of this.g.villagers.values()) if (!v.dying && !v.hidden && v.hp < v.maxHp)
       want.set('v' + v.id, { pos: v.pos.clone().setY(v.pos.y + 1.1), f: v.hp / v.maxHp, w: 0.55 });
     for (const b of this.g.buildings.values()) {
@@ -622,7 +706,7 @@ export class Combat {
   serialize() {
     return {
       raidT: this.raidActive ? 60 : this.raidT, wave: this.wave, samLevel: this.samLevel,
-      units: this.alive().filter((u) => u.kind === 'soldier' || u.kind === 'scout').map((u) => ({ id: u.id, kind: u.kind, x: u.pos.x, z: u.pos.z, hp: u.hp, order: u.order, home: u.home ? [u.home.x, u.home.z] : null })),
+      units: this.alive().filter((u) => isMine(u.kind)).map((u) => ({ id: u.id, kind: u.kind, x: u.pos.x, z: u.pos.z, hp: u.hp, order: u.order, home: u.home ? [u.home.x, u.home.z] : null })),
     };
   }
 

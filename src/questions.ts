@@ -1,5 +1,5 @@
 import type { Subject } from './data';
-import { BLANKS, PASSAGES, RHYMES, SCIENCE, SIGHT, SPELLING, type MCItem } from './content';
+import { BLANKS, PASSAGES, RHYMES, SCIENCE, SCIENCE_BRONZE, SIGHT, SPELLING, type MCItem } from './content';
 import { pick, randInt, shuffle } from './util';
 
 export type Skill = 'math' | 'reading' | 'spelling' | 'science';
@@ -122,6 +122,37 @@ function mathQ(level: number): Question {
     }
     return mk(prompt, answer, explain);
   }
+  if (level >= 4) {
+    // Bronze Age top: numbers to 100, tens and ones, skip counting
+    if (r < 0.22) {
+      const t = randInt(2, 8), o = randInt(1, 7), b = randInt(1, 9 - o);
+      prompt = `${t * 10 + o} + ${b} = ?`; answer = t * 10 + o + b;
+      explain = `${t * 10 + o} + ${b} = ${answer}. Add the ones: ${o} + ${b} = ${o + b}. The tens stay ${t * 10}.`;
+    } else if (r < 0.42) {
+      const t = randInt(2, 9), o = randInt(3, 9), b = randInt(1, o);
+      prompt = `${t * 10 + o} − ${b} = ?`; answer = t * 10 + o - b;
+      explain = `${t * 10 + o} − ${b} = ${answer}. Take away the ones: ${o} − ${b} = ${o - b}.`;
+    } else if (r < 0.58) {
+      const a = randInt(12, 58), t = randInt(1, Math.floor((99 - a) / 10)) * 10;
+      prompt = `${a} + ${t} = ?`; answer = a + t;
+      explain = `${a} + ${t} = ${answer}. Count up by tens: add ${t / 10} ten${t > 10 ? 's' : ''}.`;
+    } else if (r < 0.72) {
+      const t = randInt(2, 9), o = randInt(0, 9);
+      prompt = `${t} tens and ${o} ones make what number?`; answer = t * 10 + o;
+      explain = `${t} tens is ${t * 10}. ${t * 10} + ${o} = ${answer}.`;
+    } else if (r < 0.86) {
+      const step = pick([2, 5, 10]), start = step * randInt(1, 5);
+      const seq = [start, start + step, start + step * 2, start + step * 3];
+      prompt = `Count by ${step}s: ${seq.join(', ')}, ? What comes next?`; answer = start + step * 4;
+      explain = `Each number is ${step} more. ${seq[3]} + ${step} = ${answer}.`;
+    } else {
+      const a = randInt(21, 45), b = randInt(2, 8);
+      const n = pick(NAMES);
+      prompt = `${n}'s town has ${a} logs. The villagers chop ${b} more. How many logs now?`; answer = a + b;
+      explain = `${a} + ${b} = ${answer}.`;
+    }
+    return mk(prompt, answer, explain);
+  }
   // level 3: three addends, tens, word problems
   if (r < 0.3) {
     const a = randInt(2, 7), b = randInt(2, 7), c = randInt(2, 6);
@@ -193,20 +224,26 @@ function spellingQ(level: number): Question {
   };
 }
 
-function scienceQ(level: number): Question {
-  const item = fresh(atLevel(SCIENCE, level), (i) => i.q);
+function scienceQ(level: number, age: number): Question {
+  const bank = age >= 2 ? SCIENCE_BRONZE : SCIENCE;
+  const item = fresh(atLevel(bank, Math.min(3, level)), (i) => i.q);
   return mcFrom(item, 'science', true);
 }
 
-export function makeQuestion(subject: Subject, skills: Record<Skill, SkillStats>, forceLevel?: number): Question {
+/**
+ * Questions get harder in each age: the level inside an age (1-3) is shifted up by the age,
+ * so level 1 of the Bronze Age is as hard as level 2 of the Stone Age.
+ */
+export function makeQuestion(subject: Subject, skills: Record<Skill, SkillStats>, forceLevel?: number, age = 1): Question {
   let s: Skill;
   if (subject === 'math') s = 'math';
   else if (subject === 'science') s = 'science';
   else if (subject === 'reading') s = Math.random() < 0.3 ? 'spelling' : 'reading';
   else s = pick<Skill>(['math', 'reading', 'spelling', 'science']);
   const lv = forceLevel ?? skills[s].level;
-  if (s === 'math') return mathQ(lv);
-  if (s === 'reading') return readingQ(lv);
-  if (s === 'spelling') return spellingQ(lv);
-  return scienceQ(lv);
+  const shifted = Math.min(4, lv + age - 1);
+  if (s === 'math') return mathQ(shifted);
+  if (s === 'reading') return readingQ(shifted);
+  if (s === 'spelling') return spellingQ(shifted);
+  return scienceQ(lv, age);
 }

@@ -16,7 +16,8 @@ const CH = '/home/claude/assets/KayKit-Character-Pack-Adventures-1.0/addons/kayk
 const HX = '/home/claude/assets/KayKit-Medieval-Hexagon-Pack-1.0/addons/kaykit_medieval_hexagon_pack/Assets/gltf';
 
 const KEEP_ANIMS = ['Idle', 'Walking_A', 'Running_A', '1H_Melee_Attack_Chop', '1H_Melee_Attack_Slice_Diagonal', '2H_Melee_Attack_Chop',
-  'PickUp', 'Interact', 'Cheer', 'Use_Item', 'Hit_A', 'Death_A', 'Block', 'Spellcast_Raise', '2H_Melee_Idle', 'Unarmed_Idle'];
+  'PickUp', 'Interact', 'Cheer', 'Use_Item', 'Hit_A', 'Death_A', 'Block', 'Spellcast_Raise', '2H_Melee_Idle', 'Unarmed_Idle',
+  'Sit_Chair_Idle', '1H_Ranged_Aiming', '1H_Ranged_Shoot', '1H_Ranged_Reload'];
 const WEAPON_NODES = ['Knife_Offhand', '1H_Crossbow', '2H_Crossbow', 'Knife', 'Throwable', '1H_Axe_Offhand', '1H_Axe', '2H_Axe', 'Mug',
   '1H_Sword_Offhand', '1H_Sword', '2H_Sword', 'Badge_Shield', 'Rectangle_Shield', 'Round_Shield', 'Spike_Shield', 'Barbarian_Round_Shield'];
 
@@ -38,6 +39,15 @@ for (const name of ['Rogue', 'Rogue_Hooded', 'Knight', 'Barbarian']) {
   await io.write(path.join(OUT, name.toLowerCase() + '.glb'), doc);
   console.log(name, 'removed', removed.join(','));
 }
+// archer: the rogue keeping its one-handed crossbow
+{
+  const doc = await io.read(path.join(CH, 'Characters/gltf/Rogue.glb'));
+  const root = doc.getRoot();
+  for (const n of root.listNodes()) if (WEAPON_NODES.includes(n.getName()) && n.getName() !== '1H_Crossbow') n.dispose();
+  for (const a of root.listAnimations()) dropAnim(a);
+  await doc.transform(prune(), dedup(), squeeze());
+  await io.write(path.join(OUT, 'archer.glb'), doc);
+}
 // shared animations from the Rogue rig
 {
   const doc = await io.read(path.join(CH, 'Characters/gltf/Rogue.glb'));
@@ -58,6 +68,8 @@ const env = {
   'buildings/blue': ['building_castle_blue', 'building_home_A_blue', 'building_home_B_blue', 'building_lumbermill_blue', 'building_market_blue',
     'building_barracks_blue', 'building_tower_A_blue', 'building_well_blue', 'building_windmill_blue', 'building_blacksmith_blue', 'building_mine_blue',
     'building_tavern_blue', 'building_church_blue', 'building_watermill_blue', 'building_archeryrange_blue', 'building_tower_catapult_blue'],
+  'buildings/red': ['building_castle_red', 'building_home_A_red', 'building_home_B_red', 'building_market_red', 'building_barracks_red',
+    'building_tower_A_red', 'building_archeryrange_red', 'building_well_red'],
   'buildings/neutral': ['building_scaffolding', 'building_stage_A', 'building_stage_B', 'building_stage_C', 'building_grain', 'building_dirt',
     'building_destroyed', 'fence_wood_straight', 'fence_wood_straight_gate', 'wall_straight', 'projectile_catapult'],
   'decoration/nature': ['tree_single_A', 'tree_single_B', 'tree_single_A_cut', 'tree_single_B_cut', 'trees_A_small', 'trees_A_medium', 'trees_A_large',

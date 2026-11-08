@@ -15,10 +15,12 @@ const STATIC = [
   'barrel', 'crate_A_big', 'crate_A_small', 'crate_B_small', 'sack', 'wheelbarrow', 'resource_lumber', 'resource_stone', 'flag',
   'fence_wood_straight', 'pallet', 'bucket_water', 'axe_1handed', 'building_destroyed', 'building_barracks', 'building_tower_A',
   'weaponrack', 'target', 'sword_1handed', 'shield_badge_color', 'shield_round_color',
+  'building_castle_red', 'building_home_A_red', 'building_home_B_red', 'building_market_red', 'building_barracks_red', 'building_tower_A_red',
+  'building_archeryrange', 'building_archeryrange_red', 'flag_red',
 ] as const;
 const CHAR_PROPS = new Set(['axe_1handed', 'sword_1handed', 'shield_badge_color', 'shield_round_color']);
 export type StaticName = (typeof STATIC)[number];
-const CHARACTERS = ['rogue', 'rogue_hooded', 'knight', 'barbarian'] as const;
+const CHARACTERS = ['rogue', 'rogue_hooded', 'knight', 'barbarian', 'archer'] as const;
 export type CharName = (typeof CHARACTERS)[number];
 
 const models = new Map<string, THREE.Group>();
@@ -171,7 +173,7 @@ export const CHAR_SCALE = 0.42;
 export function makeCharacter(kind: CharName, skin = 0): Character {
   const src = models.get(kind)!;
   const inner = SkeletonUtils.clone(src) as THREE.Group;
-  if (kind === 'rogue' || kind === 'rogue_hooded') {
+  if (kind === 'rogue' || kind === 'rogue_hooded' || kind === 'archer') {
     const tex = villagerSkins[skin % villagerSkins.length];
     const matl = (findMesh(inner).material as THREE.MeshStandardMaterial).clone();
     matl.map = tex;
@@ -284,4 +286,19 @@ export function makeBundle(res: 'food' | 'wood' | 'stone' | 'gold'): THREE.Objec
     }
   }
   return m;
+}
+
+// ---------------- split animations (riders sit on a horse with their legs, and fight with their arms) ----------------
+const LOWER = /hips|spine|leg|foot|toe|knee|heel|control|root|Rig/i;
+const splitCache = new Map<string, THREE.AnimationClip>();
+export function splitClip(name: string, part: 'upper' | 'lower') {
+  const key = name + ':' + part;
+  let c = splitCache.get(key);
+  if (!c) {
+    const src = clips.get(name)!;
+    const tracks = src.tracks.filter((t) => LOWER.test(t.name.split('.')[0]) === (part === 'lower'));
+    c = new THREE.AnimationClip(key, src.duration, tracks);
+    splitCache.set(key, c);
+  }
+  return c;
 }

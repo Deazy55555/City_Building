@@ -1,7 +1,7 @@
 export type Res = 'food' | 'wood' | 'stone' | 'gold';
 export type Cost = Partial<Record<Res, number>>;
 export type Subject = 'math' | 'reading' | 'science' | 'mixed';
-export type BType = 'towncenter' | 'house' | 'farm' | 'storehouse' | 'barracks' | 'tower';
+export type BType = 'towncenter' | 'house' | 'farm' | 'storehouse' | 'barracks' | 'tower' | 'archery' | 'stables';
 
 export const RES: Res[] = ['food', 'wood', 'stone', 'gold'];
 export const RES_ICON: Record<Res, string> = { food: '🍓', wood: '🪵', stone: '🪨', gold: '🪙' };
@@ -21,7 +21,17 @@ export interface BuildingDef {
   dropsite?: boolean;
   blocks: boolean; // can villagers walk through it?
   desc: string;
+  age?: number; // first age it can be built in
 }
+
+export interface AgeDef { n: number; name: string; emoji: string; cost: Cost; time: number }
+export const AGES: AgeDef[] = [
+  { n: 1, name: 'Stone Age', emoji: '🪨', cost: {}, time: 0 },
+  { n: 2, name: 'Bronze Age', emoji: '🥉', cost: { food: 500, wood: 300, stone: 150, gold: 100 }, time: 90 },
+  { n: 3, name: 'Iron Age', emoji: '⚒️', cost: { food: 800, wood: 500, stone: 300, gold: 250 }, time: 120 },
+];
+/** the highest age that is built so far */
+export const BUILT_AGES = 2;
 
 export const BUILDINGS: Record<BType, BuildingDef> = {
   towncenter: {
@@ -50,9 +60,22 @@ export const BUILDINGS: Record<BType, BuildingDef> = {
     type: 'tower', name: 'Watch Tower', emoji: '🗼', size: 2, cost: { wood: 40, stone: 80 }, buildTime: 45, subject: 'math',
     hp: 700, blocks: true, desc: 'Shoots arrows at raiders who come close.',
   },
+  archery: {
+    type: 'archery', name: 'Archery Range', emoji: '🏹', size: 2, cost: { wood: 150, gold: 30 }, buildTime: 50, subject: 'math',
+    hp: 800, blocks: true, age: 2, desc: 'Trains archers who shoot arrows from far away.',
+  },
+  stables: {
+    type: 'stables', name: 'Stables', emoji: '🐴', size: 3, cost: { wood: 170, stone: 40 }, buildTime: 55, subject: 'math',
+    hp: 900, blocks: true, age: 2, desc: 'Trains riders on fast horses.',
+  },
 };
 
-export const BUILD_MENU: BType[] = ['house', 'farm', 'storehouse', 'barracks', 'tower'];
+export const BUILD_MENU: BType[] = ['house', 'farm', 'storehouse', 'barracks', 'tower', 'archery', 'stables'];
+
+export const ARCHER_COST: Cost = { wood: 40, gold: 25 };
+export const ARCHER_TIME = 35;
+export const RIDER_COST: Cost = { food: 70, gold: 50 };
+export const RIDER_TIME = 45;
 
 export const SOLDIER_COST: Cost = { food: 40, gold: 20 };
 export const SOLDIER_TIME = 35;
@@ -83,6 +106,7 @@ export interface ResearchDef {
   desc: string;
   cost: Cost;
   time: number;
+  age?: number;
 }
 
 export const RESEARCH: ResearchDef[] = [
@@ -90,7 +114,14 @@ export const RESEARCH: ResearchDef[] = [
   { id: 'spears', name: 'Hunting Spears', emoji: '🍖', desc: 'Gather food 25% faster.', cost: { wood: 60, stone: 30 }, time: 60 },
   { id: 'baskets', name: 'Big Baskets', emoji: '🧺', desc: 'Villagers carry 5 more.', cost: { food: 80, wood: 60 }, time: 75 },
   { id: 'picks', name: 'Stone Picks', emoji: '⛏️', desc: 'Mine stone and gold 25% faster.', cost: { food: 60, wood: 60 }, time: 75 },
+  { id: 'bronze_tools', name: 'Bronze Tools', emoji: '🔨', desc: 'Gather everything 15% faster.', cost: { wood: 150, gold: 60 }, time: 90, age: 2 },
+  { id: 'wheel', name: 'The Wheel', emoji: '⚙️', desc: 'Villagers walk 15% faster.', cost: { food: 150, wood: 120 }, time: 90, age: 2 },
+  { id: 'fletching', name: 'Fletching', emoji: '🪶', desc: 'Archers and towers shoot farther and hit harder.', cost: { food: 100, wood: 100, gold: 40 }, time: 90, age: 2 },
+  { id: 'horseshoes', name: 'Horseshoes', emoji: '🐎', desc: 'Riders run faster and hit harder.', cost: { food: 150, gold: 80 }, time: 90, age: 2 },
 ];
+export function researchFor(age: number) {
+  return RESEARCH.filter((r) => (r.age ?? 1) === age);
+}
 
 // Gather rate per second, by source kind
 export const GATHER_RATE = { tree: 0.55, berry: 0.6, carcass: 0.9, farm: 0.45, stone: 0.4, gold: 0.4 } as const;
@@ -106,6 +137,7 @@ export interface GoalDef {
   id: string;
   text: string;
   reward: Cost;
+  age?: number;
 }
 
 export const GOALS: GoalDef[] = [
@@ -125,6 +157,16 @@ export const GOALS: GoalDef[] = [
   { id: 'scout', text: 'Train a scout to explore', reward: { food: 50 } },
   { id: 'sam', text: 'Make General Sam stronger', reward: { gold: 60 } },
   { id: 'explore', text: 'Explore half of the map', reward: { gold: 80 } },
+  { id: 'bronze', text: 'Advance to the Bronze Age at the Town Center', reward: { food: 150, wood: 150 } },
+  { id: 'archery', text: 'Build an Archery Range', reward: { wood: 80 }, age: 2 },
+  { id: 'archer', text: 'Train an archer', reward: { gold: 40 }, age: 2 },
+  { id: 'stables', text: 'Build Stables', reward: { wood: 80 }, age: 2 },
+  { id: 'rider', text: 'Train a rider on a horse', reward: { gold: 50 }, age: 2 },
+  { id: 'bronze_tools', text: 'Research Bronze Tools', reward: { food: 100 }, age: 2 },
+  { id: 'pop20', text: 'Have 20 villagers', reward: { food: 100, wood: 100 }, age: 2 },
+  { id: 'defend3', text: 'Defend your town 3 times', reward: { gold: 100 }, age: 2 },
+  { id: 'sam3', text: 'Make General Sam level 3', reward: { gold: 80 }, age: 2 },
+  { id: 'allbronze', text: 'Finish all Bronze Age research', reward: { stone: 150 }, age: 2 },
   { id: 'gold', text: 'Collect 100 gold', reward: { wood: 80 } },
   { id: 'pop15', text: 'Have 15 villagers', reward: { food: 100, gold: 50 } },
   { id: 'allresearch', text: 'Finish all 4 Town Center research', reward: { stone: 100 } },

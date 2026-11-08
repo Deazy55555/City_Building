@@ -65,6 +65,12 @@ Then the rocket lifts off, his civilization becomes **interplanetary**, and he s
 - The bell hides villagers in the Town Center, where they heal. The town always keeps at least 3 villagers.
 - Fog of war: the area around the Town Center starts explored; villagers, soldiers and scouts uncover more.
 
+### Bronze Age (built)
+- Advance at the Town Center: finish all 4 Stone Age research, collect 500 food, 300 wood, 150 stone, 100 gold, then answer a ⭐ science boss question. Takes 90 seconds.
+- Questions step up one level (e.g., math reaches numbers to 100, tens and ones, skip counting). Science switches to rocks and materials.
+- New: Archery Range (archers shoot from 5.5 tiles away), Stables (riders on horses: fast and strong), 4 Bronze research, 9 Bronze goals.
+- Trees no longer block walking, so nobody gets stuck in a forest.
+
 ## Parent screen (PIN)
 His accuracy by skill, a difficulty adjustment, timer speed, an optional daily play limit (off by default), and the read-aloud voice.
 
@@ -81,5 +87,5 @@ His accuracy by skill, a difficulty adjustment, timer speed, an optional daily p
 ## Build phases
 1. ✅ **Playable Stone Age:** map, villagers gathering, hunting, TC, houses, farms, storehouse, timers, the question engine, and the resources-per-attempt rule. Save and load.
 2. ✅ Attacks, towers, soldiers, General Sam, damage and repairs, fog of war and scouts.
-3. Ages 2–4, science research, advancing ages, and the content bank.
+3. Ages 2–4, science research, advancing ages, and the content bank. ✅ Bronze Age done (advancing, harder questions, rocks & materials science, Bronze research, red town, Archery Range + archers, Stables + riders).
 4. Ages 5–8, the rocket finale, the parent screen, second settlements and trade, sound and polish.

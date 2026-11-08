@@ -32,6 +32,13 @@ export const PASSAGES: MCItem[] = [
   { level: 3, passage: 'Ava wanted to make a snowman. First, she rolled a big ball of snow for the bottom. Next, she made a middle ball and a small head. She gave it a carrot nose and two rock eyes. Last, she put her own hat on top!', q: 'What did Ava do last?', choices: ['She put her hat on top.', 'She rolled a big ball.', 'She made the head.'], why: 'The story says "Last, she put her own hat on top!"' },
   { level: 3, passage: 'Ava wanted to make a snowman. First, she rolled a big ball of snow for the bottom. Next, she made a middle ball and a small head. She gave it a carrot nose and two rock eyes. Last, she put her own hat on top!', q: 'What did Ava use for the eyes?', choices: ['two rocks', 'two carrots', 'two sticks'], why: 'She gave it two rock eyes.' },
   { level: 3, passage: 'The ant and the bee were friends. The ant liked to dig tunnels under the ground. The bee liked to fly from flower to flower. One day it rained hard. The ant let the bee stay dry in her tunnel.', q: 'How did the ant help the bee?', choices: ['She let the bee stay dry in her tunnel.', 'She gave the bee a flower.', 'She taught the bee to fly.'], why: 'When it rained, the ant let the bee stay dry in her tunnel.' },
+  { level: 4, passage: 'Bronze is made by mixing two metals, copper and tin. Long ago, people melted the metals in a very hot fire. Then they poured the hot metal into a shape made of stone. When it cooled, they had a strong new tool. Bronze tools were much better than stone tools.', q: 'What two metals make bronze?', choices: ['copper and tin', 'gold and silver', 'iron and rock'], why: 'The story says bronze is made by mixing copper and tin.' },
+  { level: 4, passage: 'Bronze is made by mixing two metals, copper and tin. Long ago, people melted the metals in a very hot fire. Then they poured the hot metal into a shape made of stone. When it cooled, they had a strong new tool. Bronze tools were much better than stone tools.', q: 'Why did people want bronze tools?', choices: ['They were better than stone tools.', 'They were soft and fluffy.', 'They could fly.'], why: 'The last sentence says bronze tools were much better than stone tools.' },
+  { level: 4, passage: 'Lena trained her horse every morning. First she brushed his mane. Then she put on his saddle and rode him around the field. At first he was slow, but each day he ran a little faster. By summer, he was the fastest horse in the village.', q: 'What did Lena do first each morning?', choices: ['She brushed his mane.', 'She rode him around the field.', 'She put on his saddle.'], why: 'The story says "First she brushed his mane."' },
+  { level: 4, passage: 'Lena trained her horse every morning. First she brushed his mane. Then she put on his saddle and rode him around the field. At first he was slow, but each day he ran a little faster. By summer, he was the fastest horse in the village.', q: 'What happened by summer?', choices: ['He was the fastest horse in the village.', 'He ran away.', 'He was very slow.'], why: 'The last sentence says he was the fastest horse by summer.' },
+  { level: 4, passage: 'The archers practiced every day. They stood in a line and aimed at round targets. Tom missed the target many times. His friend showed him how to stand still and breathe slowly. The next time, Tom hit the middle of the target!', q: 'How did Tom\'s friend help him?', choices: ['He showed him how to stand still and breathe.', 'He gave him a new horse.', 'He moved the target closer.'], why: 'His friend showed him how to stand still and breathe slowly.' },
+  { level: 4, passage: 'The river was too wide to cross. The villagers cut down trees and tied the logs together with rope. They made a long, flat raft. Now they could carry food and wood across the water. Everyone cheered when the first raft reached the other side.', q: 'What did the villagers make?', choices: ['a raft', 'a castle', 'a wagon'], why: 'They tied logs together to make a long, flat raft.' },
+  { level: 4, passage: 'The river was too wide to cross. The villagers cut down trees and tied the logs together with rope. They made a long, flat raft. Now they could carry food and wood across the water. Everyone cheered when the first raft reached the other side.', q: 'Why did they need a raft?', choices: ['The river was too wide to cross.', 'They wanted to go fishing.', 'Their house was on fire.'], why: 'The first sentence says the river was too wide to cross.' },
   { level: 3, passage: 'A knight had a big gray horse. Every morning, he brushed the horse and gave it apples. The horse was fast and strong. When the knight rode to the castle, they got there first.', q: 'What did the knight give the horse?', choices: ['apples', 'carrots', 'bread'], why: 'Every morning he gave it apples.' },
 ];
 
@@ -52,6 +59,11 @@ export const BLANKS: MCItem[] = [
   { level: 3, q: 'The knight was ___, so he was not scared of the dragon.', choices: ['brave', 'tiny', 'sleepy'], why: 'Brave means not scared.' },
   { level: 3, q: 'Please be ___ in the library.', choices: ['quiet', 'noisy', 'wet'], why: 'We are quiet in a library.' },
   { level: 3, q: 'The rocket went up, up, up into ___.', choices: ['space', 'the sea', 'a box'], why: 'Rockets fly into space.' },
+  { level: 4, q: 'The blacksmith heated the metal until it was very ___.', choices: ['hot', 'quiet', 'blue'], why: 'Metal must be very hot to bend it.' },
+  { level: 4, q: 'The archer pulled back the string and let the arrow ___.', choices: ['fly', 'sleep', 'melt'], why: 'Arrows fly when you let go of the string.' },
+  { level: 4, q: 'The horse was ___ after the long race, so it took a nap.', choices: ['tired', 'hungry', 'purple'], why: 'After a long race you feel tired, so you rest.' },
+  { level: 4, q: 'We could not see the top of the mountain because of the ___.', choices: ['clouds', 'spoons', 'shoes'], why: 'Clouds can cover the top of a mountain.' },
+  { level: 4, q: 'The farmer stored the wheat in the barn so it would stay ___.', choices: ['dry', 'loud', 'tall'], why: 'A barn keeps wheat dry when it rains.' },
 ];
 
 export const RHYMES: { level: number; word: string; yes: string; no: string[] }[] = [
@@ -67,6 +79,10 @@ export const RHYMES: { level: number; word: string; yes: string; no: string[] }[
   { level: 3, word: 'tower', yes: 'flower', no: ['tiger', 'table'] },
   { level: 3, word: 'stone', yes: 'phone', no: ['stamp', 'storm'] },
   { level: 3, word: 'gold', yes: 'cold', no: ['goal', 'glad'] },
+  { level: 4, word: 'bright', yes: 'night', no: ['brick', 'bring'] },
+  { level: 4, word: 'shield', yes: 'field', no: ['shell', 'shed'] },
+  { level: 4, word: 'arrow', yes: 'narrow', no: ['army', 'apple'] },
+  { level: 4, word: 'horse', yes: 'course', no: ['house', 'hose'] },
 ];
 
 export const SIGHT: { level: number; word: string; lookalikes: string[] }[] = [
@@ -84,13 +100,43 @@ export const SIGHT: { level: number; word: string; lookalikes: string[] }[] = [
   { level: 3, word: 'enough', lookalikes: ['even', 'rough'] },
   { level: 3, word: 'again', lookalikes: ['against', 'agree'] },
   { level: 3, word: 'friend', lookalikes: ['fried', 'find'] },
+  { level: 4, word: 'people', lookalikes: ['purple', 'pebble'] },
+  { level: 4, word: 'answer', lookalikes: ['another', 'anyone'] },
+  { level: 4, word: 'different', lookalikes: ['difficult', 'distant'] },
+  { level: 4, word: 'together', lookalikes: ['tomorrow', 'toward'] },
+  { level: 4, word: 'country', lookalikes: ['county', 'counter'] },
 ];
 
 export const SPELLING: Record<number, string[]> = {
   1: ['cat', 'dog', 'sun', 'hat', 'pig', 'bed', 'fox', 'cup', 'map', 'hen', 'net', 'bug', 'log', 'red', 'big', 'run', 'top', 'box', 'web', 'axe'],
   2: ['ship', 'fish', 'frog', 'jump', 'sand', 'stop', 'flag', 'crab', 'duck', 'milk', 'chip', 'shop', 'bath', 'tent', 'nest', 'drum', 'swim', 'sled', 'deer', 'king'],
   3: ['tree', 'boat', 'rain', 'cake', 'bike', 'home', 'seed', 'farm', 'gold', 'stone', 'house', 'night', 'snake', 'sheep', 'train', 'smile', 'light', 'tower', 'berry', 'horse'],
+  4: ['bronze', 'shield', 'arrow', 'bridge', 'castle', 'knight', 'metal', 'bucket', 'wagon', 'forest', 'plant', 'chest', 'brush', 'frost', 'stamp', 'cloud', 'thunder', 'river', 'saddle', 'target'],
 };
+
+// Bronze Age science: rocks and materials
+export const SCIENCE_BRONZE: MCItem[] = [
+  { level: 1, q: 'Which one is the hardest?', choices: ['a rock', 'a pillow', 'a sponge'], why: 'Rocks are hard. Pillows and sponges are soft.' },
+  { level: 1, q: 'What is a window usually made of?', choices: ['glass', 'wood', 'cloth'], why: 'Windows are made of glass so light can come through.' },
+  { level: 1, q: 'Which one will float on water?', choices: ['a wooden stick', 'a rock', 'a metal key'], why: 'Wood is light and floats. Rocks and metal sink.' },
+  { level: 1, q: 'What do we get from trees to build houses?', choices: ['wood', 'glass', 'metal'], why: 'Wood comes from trees.' },
+  { level: 1, q: 'Which one is made of metal?', choices: ['a coin', 'a leaf', 'a cookie'], why: 'Coins are made of metal.' },
+  { level: 1, q: 'Sand on the beach is made of tiny bits of ___.', choices: ['rock', 'sugar', 'paper'], why: 'Waves break rocks into tiny bits of sand.' },
+  { level: 2, q: 'What happens to ice when it gets warm?', choices: ['It melts into water.', 'It turns into rock.', 'It gets bigger.'], why: 'Warm air melts ice into water.' },
+  { level: 2, q: 'Why do people make pots out of clay?', choices: ['Clay gets hard when it is baked.', 'Clay is see-through.', 'Clay can fly.'], why: 'Soft clay can be shaped, then baking makes it hard.' },
+  { level: 2, q: 'What does a magnet stick to?', choices: ['an iron nail', 'a wooden block', 'a plastic cup'], why: 'Magnets pull on iron and steel.' },
+  { level: 2, q: 'Which is the best thing to keep you dry in the rain?', choices: ['a raincoat', 'a paper bag', 'a cotton towel'], why: 'A raincoat is waterproof, so water rolls off.' },
+  { level: 2, q: 'What do you need to melt metal?', choices: ['a very hot fire', 'cold water', 'a strong wind'], why: 'Metal melts only when it is very, very hot.' },
+  { level: 2, q: 'Bronze is a mix of copper and ___.', choices: ['tin', 'water', 'sand'], why: 'Long ago people mixed copper and tin to make bronze.' },
+  { level: 2, q: 'Which rock is so soft you can draw with it?', choices: ['chalk', 'granite', 'diamond'], why: 'Chalk is a soft rock that leaves marks.' },
+  { level: 3, q: 'Why is a bronze axe better than a stone axe?', choices: ['It is stronger and stays sharp.', 'It is softer.', 'It is lighter than a feather.'], why: 'Bronze is strong and can be made very sharp.' },
+  { level: 3, q: 'Where does melted rock come out of the ground?', choices: ['a volcano', 'a river', 'a cloud'], why: 'Hot melted rock, called lava, comes out of volcanoes.' },
+  { level: 3, q: 'What are bricks made from?', choices: ['clay that is baked', 'ice', 'leaves'], why: 'Bricks are made of clay that is shaped and baked hard.' },
+  { level: 3, q: 'Which one is a solid?', choices: ['a block of wood', 'juice', 'steam'], why: 'Solids keep their shape. Juice is a liquid and steam is a gas.' },
+  { level: 3, q: 'When water boils, it turns into ___.', choices: ['steam', 'sand', 'ice'], why: 'Boiling water turns into a gas called steam.' },
+  { level: 3, q: 'Why do we build houses out of stone or wood, not paper?', choices: ['They are strong and last a long time.', 'They are softer.', 'They taste better.'], why: 'Stone and wood are strong; paper tears and gets wet.' },
+  { level: 3, q: 'What makes a metal pot good for cooking?', choices: ['Metal lets heat pass through it.', 'Metal keeps food cold.', 'Metal is see-through.'], why: 'Heat moves easily through metal to cook the food.' },
+];
 
 // Stone Age science: plants and animals
 export const SCIENCE: MCItem[] = [

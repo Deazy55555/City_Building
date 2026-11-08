@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import type { BType } from './data';
 import { atlasMaterial, model, type StaticName } from './assets';
+import { makeHorse, type Quad } from './animals';
 
 // ---------- shared materials & geometry ----------
 const matCache = new Map<string, THREE.MeshStandardMaterial>();
@@ -83,50 +84,6 @@ export interface VillagerParts {
   bundle: THREE.Mesh;
 }
 
-export function makeDeer(rnd: () => number = Math.random) {
-  const g = new THREE.Group();
-  const fur = mat(rnd() < 0.5 ? 0xa0673a : 0x8f5b33);
-  const light = mat(0xe8d2b0);
-  const dark = mat(0x3b2a1e);
-  g.add(m(box(0.5, 0.22, 0.2), fur, 0, 0.42, 0));
-  g.add(m(box(0.12, 0.1, 0.18), light, -0.24, 0.45, 0)); // tail patch
-  const neck = new THREE.Group();
-  neck.position.set(0.22, 0.48, 0);
-  neck.add(m(box(0.1, 0.24, 0.1), fur, 0.03, 0.1, 0).rotateZ(-0.4));
-  const head = m(box(0.18, 0.1, 0.1), fur, 0.13, 0.22, 0);
-  neck.add(head);
-  neck.add(m(box(0.03, 0.03, 0.03), dark, 0.23, 0.22, 0)); // nose
-  if (rnd() < 0.5) {
-    const ant = mat(0xd9c4a0);
-    neck.add(m(box(0.02, 0.14, 0.02), ant, 0.08, 0.32, 0.04).rotateZ(0.3));
-    neck.add(m(box(0.02, 0.14, 0.02), ant, 0.08, 0.32, -0.04).rotateZ(0.3));
-  }
-  g.add(neck);
-  const legs: THREE.Group[] = [];
-  for (const [x, z] of [[0.18, 0.07], [0.18, -0.07], [-0.18, 0.07], [-0.18, -0.07]]) {
-    const hip = new THREE.Group();
-    hip.position.set(x, 0.34, z);
-    hip.add(m(box(0.05, 0.34, 0.05), fur, 0, -0.17, 0));
-    hip.add(m(box(0.055, 0.04, 0.055), dark, 0, -0.33, 0));
-    g.add(hip);
-    legs.push(hip);
-  }
-  g.userData.legs = legs;
-  g.userData.neck = neck;
-  g.scale.setScalar(1.15);
-  return g;
-}
-
-export function animateDeer(g: THREE.Group, moving: boolean, grazing: boolean, t: number) {
-  const legs = g.userData.legs as THREE.Group[];
-  const neck = g.userData.neck as THREE.Group;
-  const s = moving ? Math.sin(t * 9) * 0.5 : 0;
-  legs[0].rotation.z = s; legs[3].rotation.z = s;
-  legs[1].rotation.z = -s; legs[2].rotation.z = -s;
-  neck.rotation.z = grazing ? -0.9 + Math.sin(t * 3) * 0.08 : 0;
-}
-
-// ---------- resource nodes ----------
 export function makeBerryBush(rnd: () => number) {
   const g = new THREE.Group();
   const leaf = mat(0x3f8f3a);
@@ -146,17 +103,6 @@ export function makeBerryBush(rnd: () => number) {
   g.rotation.y = rnd() * Math.PI * 2;
   return g;
 }
-
-export function makeCarcass() {
-  const g = new THREE.Group();
-  const fur = mat(0x7d4f2c);
-  g.add(m(box(0.45, 0.16, 0.2), fur, 0, 0.09, 0));
-  g.add(m(box(0.16, 0.09, 0.1), fur, 0.3, 0.06, 0.05));
-  for (const x of [0.15, -0.15]) g.add(m(box(0.3, 0.04, 0.04), fur, x, 0.04, 0.16).rotateY(0.2));
-  return g;
-}
-
-// ---------- buildings ----------
 
 // ---------- trees & rocks (KayKit models) ----------
 export function makeTree(rnd: () => number) {
@@ -224,8 +170,61 @@ const LOOKS: Record<BType, BuildingLook[]> = {
   storehouse: [{ name: 'building_market', scale: 1.05 }],
   barracks: [{ name: 'building_barracks', scale: 1.25 }],
   tower: [{ name: 'building_tower_A', scale: 1.5 }],
+  archery: [{ name: 'building_archeryrange', scale: 1.3 }],
+  stables: [],
 };
-const SIZE: Record<BType, number> = { towncenter: 3, house: 2, farm: 3, storehouse: 2, barracks: 2, tower: 2 };
+// the Bronze Age paints the town red
+const LOOKS_BRONZE: Partial<Record<BType, BuildingLook[]>> = {
+  towncenter: [{ name: 'building_castle_red', scale: 1.3 }],
+  house: [{ name: 'building_home_A_red', scale: 2.0 }, { name: 'building_home_B_red', scale: 1.6 }],
+  storehouse: [{ name: 'building_market_red', scale: 1.05 }],
+  barracks: [{ name: 'building_barracks_red', scale: 1.25 }],
+  tower: [{ name: 'building_tower_A_red', scale: 1.5 }],
+  archery: [{ name: 'building_archeryrange_red', scale: 1.3 }],
+};
+const SIZE: Record<BType, number> = { towncenter: 3, house: 2, farm: 3, storehouse: 2, barracks: 2, tower: 2, archery: 2, stables: 3 };
+export const AGE_COLOR = { roof: [0x3d6fc4, 0xb5463a, 0x3f9a4a], blanket: [0x2f6fd6, 0xc0392b, 0x3f9a4a] };
+
+/** A stable: a wooden shelter, a fenced paddock, hay, a trough, and horses */
+function stables(rnd: () => number, age: number) {
+  const g = new THREE.Group();
+  const wood = mat(COLORS.wood), dark = mat(COLORS.darkWood), roof = mat(AGE_COLOR.roof[Math.min(age, 3) - 1], 0.7);
+  // shelter along the back
+  for (const x of [-1.25, 0, 1.25]) for (const z of [-1.25, -0.35]) g.add(m(box(0.12, z < -1 ? 1.25 : 1.05, 0.12), dark, x, z < -1 ? 0.62 : 0.52, z));
+  g.add(m(box(2.7, 0.1, 0.12), dark, 0, 1.2, -1.25));
+  const r = m(box(2.9, 0.08, 1.25), roof, 0, 1.2, -0.8);
+  r.rotation.x = -0.18;
+  g.add(r);
+  g.add(m(box(2.6, 0.7, 0.06), wood, 0, 0.35, -1.3));
+  for (let k = 0; k < 6; k++) g.add(m(box(0.03, 0.7, 0.02), dark, -1.1 + k * 0.44, 0.35, -1.26, false));
+  // fence around the paddock
+  const post = mat(COLORS.wood);
+  for (let i = 0; i <= 6; i++) {
+    const t = -1.4 + i * (2.8 / 6);
+    for (const [x, z] of [[t, 1.4], [1.4, t], [-1.4, t]]) g.add(m(box(0.07, 0.36, 0.07), post, x, 0.18, z));
+  }
+  for (const [x, z, ry] of [[0, 1.4, 0], [1.4, 0, Math.PI / 2], [-1.4, 0, Math.PI / 2]] as const) {
+    g.add(m(box(2.8, 0.05, 0.04), post, x, 0.28, z).rotateY(ry));
+    g.add(m(box(2.8, 0.05, 0.04), post, x, 0.14, z).rotateY(ry));
+  }
+  // hay bales and a water trough
+  const hay = mat(0xe3c04a, 0.9);
+  for (const [x, z] of [[-1.05, -0.85], [-0.7, -0.95], [-0.88, -0.6]]) g.add(m(cyl(0.16, 0.16, 0.3, 10), hay, x, 0.16, z).rotateZ(Math.PI / 2));
+  g.add(m(box(0.7, 0.2, 0.25), wood, 0.85, 0.12, -0.8));
+  g.add(m(box(0.62, 0.02, 0.18), mat(0x4aa3df, 0.2), 0.85, 0.215, -0.8, false));
+  const horses: Quad[] = [];
+  for (const [x, z, ry] of [[-0.3, 0.55, 0.4], [0.75, 0.35, 2.6]] as const) {
+    const h = makeHorse(rnd, AGE_COLOR.blanket[Math.min(age, 3) - 1]);
+    if (h.saddle) h.saddle.visible = false;
+    h.root.scale.setScalar(0.85);
+    h.root.position.set(x, 0, z);
+    h.root.rotation.y = ry;
+    g.add(h.root);
+    horses.push(h);
+  }
+  g.userData.horses = horses;
+  return g;
+}
 
 function props(type: BType, rnd: () => number) {
   const g = new THREE.Group();
@@ -245,6 +244,8 @@ function props(type: BType, rnd: () => number) {
     put('barrel', 0.8, -0.65, 1.3);
   } else if (type === 'barracks') {
     put('weaponrack', 0.8, 0.8, 1.3, 0); put('target', -0.8, 0.85, 1.3, 0);
+  } else if (type === 'archery') {
+    put('target', 0.85, 0.85, 1.4, 0); put('target', -0.85, 0.85, 1.4, 0); put('barrel', 0.85, -0.7, 1.2);
   } else if (type === 'tower') {
     put('barrel', 0.7, 0.7, 1.1); put('crate_A_small', -0.7, 0.75, 1.1);
   } else if (type === 'house') {
@@ -265,12 +266,13 @@ function farmFence() {
   return g;
 }
 
-export function makeBuilding(type: BType, rnd: () => number = Math.random) {
+export function makeBuilding(type: BType, rnd: () => number = Math.random, age = 1) {
   const wrap = new THREE.Group();
-  const looks = LOOKS[type];
-  const look = looks[Math.floor(rnd() * looks.length)];
-  const model0 = model(look.name);
-  model0.scale.setScalar(look.scale);
+  const looks = (age >= 2 ? LOOKS_BRONZE[type] : undefined) ?? LOOKS[type];
+  const look = looks[Math.floor(rnd() * Math.max(1, looks.length))];
+  const model0 = type === 'stables' ? stables(rnd, age) : model(look.name);
+  if (type !== 'stables') model0.scale.setScalar(look.scale);
+  wrap.userData.horses = model0.userData.horses ?? [];
   if (type === 'house') model0.rotation.y = rnd() < 0.5 ? 0 : Math.PI / 2;
   const main = new THREE.Group();
   main.add(model0);
@@ -340,8 +342,8 @@ export function setBuildProgress(wrap: THREE.Group, progress: number, built: boo
 }
 
 /** Translucent copy used to preview placement */
-export function makeGhost(type: BType) {
-  const g = makeBuilding(type);
+export function makeGhost(type: BType, age = 1) {
+  const g = makeBuilding(type, Math.random, age);
   setBuildProgress(g, 1, true);
   const good = new THREE.MeshStandardMaterial({ color: 0x55ff77, transparent: true, opacity: 0.55, depthWrite: false });
   const bad = new THREE.MeshStandardMaterial({ color: 0xff5555, transparent: true, opacity: 0.55, depthWrite: false });

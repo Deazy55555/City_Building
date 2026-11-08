@@ -1,6 +1,7 @@
 import {
-  BUILD_MENU, BUILDINGS, GOALS, RES, RES_ICON, RES_NAME, RESEARCH, SAM_MAX_LEVEL, SCOUT_COST, SCOUT_TIME, SOLDIER_COST, SOLDIER_TIME,
+  BUILD_MENU, BUILDINGS, GOALS, RES, RES_ICON, RES_NAME, SAM_MAX_LEVEL, SCOUT_COST, SCOUT_TIME, SOLDIER_COST, SOLDIER_TIME,
   VILLAGER_COST, VILLAGER_TIME, costText, repairCost, samUpgradeCost, type Cost, type Res,
+  AGES, ARCHER_COST, ARCHER_TIME, BUILT_AGES, RIDER_COST, RIDER_TIME, researchFor,
 } from './data';
 import { Minimap } from './minimap';
 import type { Game, GameUI } from './game';
@@ -47,6 +48,8 @@ export class UI implements GameUI {
   edgeArrow = h('div', 'edge-arrow', '⚔️');
   minimap: Minimap;
   private dyn: (() => void)[] = [];
+  private ageChip = h('div', 'age-chip');
+  private shownAge = 0;
   private selKey = '';
   private mouse = { x: 0, y: 0 };
   private idleIdx = 0;
@@ -85,7 +88,8 @@ export class UI implements GameUI {
     pop.title = 'Villagers / room in your town';
     pop.append(this.popEl);
     left.append(pop);
-    const age = h('div', 'age-chip', '🪨 Stone Age');
+    const age = this.ageChip;
+    age.textContent = '🪨 Stone Age';
     const menu = h('button', 'menu-btn', '⚙️');
     menu.title = 'Menu';
     menu.addEventListener('click', () => this.openMenu());
@@ -108,6 +112,12 @@ export class UI implements GameUI {
     this.popEl.textContent = `${g.popUsed()}/${g.popCap()}`;
     this.raidTick();
     this.minimap.tick();
+    if (this.shownAge !== g.age) {
+      this.shownAge = g.age;
+      const a = AGES[g.age - 1];
+      this.ageChip.textContent = `${a.emoji} ${a.name}`;
+      this.renderGoals();
+    }
     // refresh the panel when the selected building gets damaged, broken or fixed
     const sb = g.selectedBuilding !== null ? g.buildings.get(g.selectedBuilding) : undefined;
     const key = sb ? `${sb.id}:${sb.hp < BUILDINGS[sb.type].hp}:${sb.broken}:${sb.repairing}:${sb.built}` : '';
@@ -178,10 +188,13 @@ export class UI implements GameUI {
   private unitPanel() {
     const g = this.game;
     const us = g.selectedUnits();
-    const soldiers = us.filter((u) => u.kind === 'soldier'), scouts = us.filter((u) => u.kind === 'scout');
+    const soldiers = us.filter((u) => u.kind === 'soldier' || u.kind === 'archer' || u.kind === 'rider'), scouts = us.filter((u) => u.kind === 'scout');
     const head = h('div', 'panel-head');
     const parts = [];
-    if (soldiers.length) parts.push(soldiers.length === 1 ? '🛡️ Soldier' : `🛡️ ${soldiers.length} soldiers`);
+    const n = (k: string) => us.filter((u) => u.kind === k).length;
+    if (n('soldier')) parts.push(n('soldier') === 1 ? '🛡️ Soldier' : `🛡️ ${n('soldier')} soldiers`);
+    if (n('archer')) parts.push(n('archer') === 1 ? '🏹 Archer' : `🏹 ${n('archer')} archers`);
+    if (n('rider')) parts.push(n('rider') === 1 ? '🐴 Rider' : `🐴 ${n('rider')} riders`);
     if (scouts.length) parts.push(scouts.length === 1 ? '🧭 Scout' : `🧭 ${scouts.length} scouts`);
     head.append(h('span', '', parts.join(' + ')));
     const close = h('button', 'x-btn', '✖');
@@ -251,6 +264,11 @@ export class UI implements GameUI {
     const row = h('div', 'act-row');
     for (const t of BUILD_MENU) {
       const def = BUILDINGS[t];
+      if ((def.age ?? 1) > g.age) {
+        const lock = h('div', 'act locked-act', `<div class="act-label">🔒 ${def.emoji} ${def.name}</div><div class="act-sub">Comes in the ${AGES[(def.age ?? 1) - 1].name}</div>`);
+        row.append(lock);
+        continue;
+      }
       row.append(this.costButton(`${def.emoji} ${def.name}`, def.cost, def.subject, () => g.startPlacement(t)));
     }
     this.panel.append(row);
@@ -298,6 +316,19 @@ export class UI implements GameUI {
       this.panel.append(n);
     }
     if (b.type === 'tower') this.panel.append(h('div', 'panel-hint', '🏹 Towers shoot arrows at raiders all by themselves. Build them near your town.'));
+    if (b.type === 'archery' || b.type === 'stables') {
+      const archer = b.type === 'archery';
+      this.panel.append(h('div', 'section', `Train ${archer ? 'an archer' : 'a rider'} <span class="muted">(answer a Math question)</span>`));
+      const row = h('div', 'act-row');
+      row.append(archer
+        ? this.costButton('🏹 Archer', ARCHER_COST, 'math', () => g.combat.trainArcher(b), '<br>Shoots from far away')
+        : this.costButton('🐴 Rider', RIDER_COST, 'math', () => g.combat.trainRider(b), '<br>Fast and strong'));
+      this.panel.append(row);
+      this.panel.append(this.queueView(b.id));
+      const cnt = h('div', 'panel-hint');
+      this.dyn.push(() => { cnt.textContent = `You have ${g.combat.alive(archer ? 'archer' : 'rider').length} ${archer ? 'archer' : 'rider'}(s).`; });
+      this.panel.append(cnt);
+    }
     if (b.type === 'farm') {
       const st = h('div', 'panel-hint');
       this.dyn.push(() => { st.textContent = b.farmer !== null && g.villagers.has(b.farmer) ? '👩‍🌾 A villager is farming here.' : '🌾 Nobody is farming here. Pick a villager and click the farm.'; });
@@ -325,7 +356,7 @@ export class UI implements GameUI {
 
       this.panel.append(h('div', 'section', 'Research <span class="muted">(answer a Science question)</span>'));
       const rrow = h('div', 'act-row');
-      for (const r of RESEARCH) {
+      for (const r of researchFor(g.age)) {
         if (g.research.has(r.id)) {
           rrow.append(h('div', 'act done', `<div class="act-label">${r.emoji} ${r.name}</div><div class="act-cost">✅ Done</div><div class="act-sub">${r.desc}</div>`));
           continue;
@@ -339,8 +370,40 @@ export class UI implements GameUI {
         rrow.append(btn);
       }
       this.panel.append(rrow);
-      this.panel.append(h('div', 'locked', '🔒 Bronze Age — coming in a future update'));
+      this.panel.append(this.ageCard(b.id));
     }
+  }
+
+  private ageCard(tcId: number) {
+    const g = this.game;
+    const next = AGES[g.age];
+    const card = h('div', 'age-card');
+    if (!next) return card;
+    if (g.age >= BUILT_AGES) {
+      card.innerHTML = `<div class="sam-title">🔒 ${next.emoji} ${next.name}</div><div class="muted">Coming in a future update!</div>`;
+      return card;
+    }
+    card.innerHTML = `<div class="sam-title">${next.emoji} Advance to the ${next.name}</div>`;
+    const list = h('div', 'age-req');
+    card.append(list);
+    const btn = this.costButton(`${next.emoji} Advance to the ${next.name}`, next.cost, 'science', () => g.startAgeUp(), ' · ⭐ Boss question');
+    btn.classList.add('boss');
+    card.append(btn);
+    const bar = this.progressBar(() => (g.buildings.get(tcId)?.ageUp?.t ?? 0) / next.time, () => `Advancing… ${Math.floor(((g.buildings.get(tcId)?.ageUp?.t ?? 0) / next.time) * 100)}%`);
+    card.append(bar);
+    this.dyn.push(() => {
+      const tc = g.buildings.get(tcId);
+      const busy = !!tc?.ageUp;
+      bar.style.display = busy ? 'block' : 'none';
+      btn.style.display = busy ? 'none' : 'block';
+      const research = researchFor(g.age);
+      const done = research.filter((r) => g.research.has(r.id)).length;
+      list.innerHTML = `<div>${done === research.length ? '✅' : '⬜'} Finish all ${research.length} research (${done}/${research.length})</div>
+        <div>${g.canAfford(next.cost) ? '✅' : '⬜'} Collect ${costText(next.cost)}</div>
+        <div class="muted">Tip: a Storehouse lets you hold more.</div>`;
+      btn.classList.toggle('cant', !g.canAfford(next.cost) || done < research.length);
+    });
+    return card;
   }
 
   private queueView(id: number) {
@@ -350,8 +413,8 @@ export class UI implements GameUI {
       const b = g.buildings.get(id);
       if (!b || !b.queue.length) { q.innerHTML = ''; return; }
       q.innerHTML = b.queue.map((it, k) => {
-        const icon = it.kind === 'soldier' ? '🛡️' : it.kind === 'scout' ? '🧭' : RES_ICON[it.job ?? 'food'];
-        const total = it.kind === 'soldier' ? SOLDIER_TIME : it.kind === 'scout' ? SCOUT_TIME : VILLAGER_TIME;
+        const icon = it.kind === 'soldier' ? '🛡️' : it.kind === 'scout' ? '🧭' : it.kind === 'archer' ? '🏹' : it.kind === 'rider' ? '🐴' : RES_ICON[it.job ?? 'food'];
+        const total = it.kind === 'soldier' ? SOLDIER_TIME : it.kind === 'scout' ? SCOUT_TIME : it.kind === 'archer' ? ARCHER_TIME : it.kind === 'rider' ? RIDER_TIME : VILLAGER_TIME;
         return `<span class="q-item">${icon}${k === 0 ? ` <span class="mini-bar"><span style="width:${(it.t / total) * 100}%"></span></span>` : ''}</span>`;
       }).join('');
     });
@@ -369,7 +432,7 @@ export class UI implements GameUI {
 
   // ---------------- goals & toasts ----------------
   renderGoals() {
-    const next = GOALS.filter((x) => !this.game.goalsDone.has(x.id)).slice(0, 3);
+    const next = GOALS.filter((x) => (x.age ?? 1) <= this.game.age && !this.game.goalsDone.has(x.id)).slice(0, 3);
     this.goals.innerHTML = '<div class="goals-title">⭐ Goals</div>';
     if (!next.length) this.goals.innerHTML += '<div class="goal">All goals done! 🎉</div>';
     for (const gl of next) {
@@ -378,6 +441,12 @@ export class UI implements GameUI {
       row.append(h('div', 'goal-reward', `Reward: ${costText(gl.reward)}`));
       this.goals.append(row);
     }
+  }
+
+  ageChanged() {
+    this.shownAge = 0;
+    this.renderGoals();
+    this.refreshSelection();
   }
 
   goalDone(text: string, reward: Cost) {
@@ -626,6 +695,7 @@ export class UI implements GameUI {
         'Raiders will attack sometimes. Build a Barracks to train soldiers, and Watch Towers that shoot arrows.',
         'Ring the bell to hide your villagers in the Town Center. If the raiders hurt the Town Center, General Sam comes to save the day!',
         'Train a scout to explore the clouds and find more trees, rocks and gold. Use the little map to jump around.',
+        'When you have finished all the research and saved up enough, click the Town Center to advance to the next age. Then you can build an Archery Range and Stables!',
         'Scroll to zoom. Use W A S D, the arrow keys, or drag with the right mouse button to look around. Q and E turn the view.',
       ];
       const list = h('ul', 'help');

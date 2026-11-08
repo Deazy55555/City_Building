@@ -209,3 +209,6 @@ button { font-family: inherit; cursor: pointer; }
 .sam-level { background: #d39b14; color: #fff; border-radius: 999px; padding: 1px 10px; font-size: 14px; margin-left: 6px; }
 .act.boss { margin-top: 8px; border-color: #d39b14; background: linear-gradient(#fff6d3, #ffe18a); box-shadow: 0 3px 0 #a87a0e; }
 .act.boss.cant { border-color: #b9b0a0; background: #eee8dc; box-shadow: 0 3px 0 #a39a88; }
+.age-card { margin-top: 12px; padding: 10px 12px; border: 3px solid #b5463a; border-radius: 14px; background: linear-gradient(#fff3ec, #ffd9c9); }
+.age-req { margin: 6px 0; font-weight: 700; line-height: 1.6; }
+.act.locked-act { border-color: #c9bfae; background: #f1ece2; box-shadow: none; color: #8f8577; cursor: default; }

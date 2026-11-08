@@ -1,16 +1,17 @@
 import * as THREE from 'three';
 import {
   BUILDINGS, FOOD_UPKEEP_EVERY, GATHER_RATE, GOALS, MAX_POP, RES, RES_ICON, RESEARCH, VILLAGER_COST, VILLAGER_SPEED,
-  VILLAGER_TIME, BASE_CARRY, costText, repairCost, type BType, type Cost, type Res, type Subject,
+  VILLAGER_TIME, BASE_CARRY, costText, repairCost, AGES, BUILT_AGES, researchFor, type BType, type Cost, type Res, type Subject,
 } from './data';
 import {
-  animateDeer, makeBerryBush, makeBuilding, makeCarcass, makeDeer, makeGhost, makeRock, makeStump,
+  makeBerryBush, makeBuilding, makeGhost, makeRock, makeStump,
   makeTree, mat, setBroken, setBuildProgress, setGhostValid,
 } from './models';
 import { ChunkMerger, windMaterial } from './bake';
 import { atlasMaterial, makeBundle, makeCharacter, makeTool, playAnim, type Character, type ToolName } from './assets';
 import { FX, loadQuality } from './fx';
-import { Combat, type Unit } from './combat';
+import { animateQuad, makeDeer, type Quad } from './animals';
+import { Combat, isMine, type Unit } from './combat';
 import { Fog } from './fog';
 import { U } from './uniforms';
 
@@ -31,12 +32,13 @@ export interface ResNode {
 }
 export interface Building {
   id: number; type: BType; i: number; j: number; size: number; built: boolean; progress: number; hp: number;
-  mesh: THREE.Group; queue: { job: Res | null; t: number; kind?: 'villager' | 'soldier' | 'scout' }[]; research: { id: string; t: number } | null; farmer: number | null;
+  mesh: THREE.Group; queue: { job: Res | null; t: number; kind?: 'villager' | 'soldier' | 'scout' | 'archer' | 'rider' }[];
+  ageUp?: { t: number } | null; research: { id: string; t: number } | null; farmer: number | null;
   broken: boolean; repairing: boolean;
 }
 /** Anything that walks along a path */
 export interface Walker { pos: THREE.Vector3; path: THREE.Vector3[]; mesh: THREE.Object3D; offset: THREE.Vector2 }
-export interface Animal { id: number; pos: THREE.Vector3; target: THREE.Vector3; home: THREE.Vector3; mesh: THREE.Group; wait: number; t: number }
+export interface Animal { id: number; pos: THREE.Vector3; target: THREE.Vector3; home: THREE.Vector3; mesh: THREE.Group; q: Quad; wait: number; t: number }
 export type Task =
   | { k: 'idle' }
   | { k: 'move' }
@@ -57,7 +59,7 @@ export interface Villager {
 
 export interface Stats {
   trained: number; hunted: number; collected: Record<Res, number>; answered: number; correct: number;
-  soldiers?: number; scouts?: number; raidsDefended?: number;
+  soldiers?: number; scouts?: number; raidsDefended?: number; archers?: number; riders?: number;
 }
 
 export interface GameUI {
@@ -65,6 +67,7 @@ export interface GameUI {
   toast(msg: string, speak?: boolean): void;
   refreshSelection(): void;
   goalDone(text: string, reward: Cost): void;
+  ageChanged(): void;
 }
 
 const SAVE_KEY = 'citybuilding.save.v1';
@@ -105,6 +108,7 @@ export class Game {
   stats: Stats = { trained: 0, hunted: 0, collected: { food: 0, wood: 0, stone: 0, gold: 0 }, answered: 0, correct: 0 };
   skills: Record<Skill, SkillStats> = newSkills();
   seed = 1;
+  age = 1;
   nextId = 1;
   playTime = 0;
   upkeepT = 0;
@@ -236,6 +240,7 @@ export class Game {
 
   newGame(seed = Math.floor(Math.random() * 1e9)) {
     this.clearWorld();
+    this.age = 1;
     this.res = { food: 200, wood: 200, stone: 100, gold: 50 };
     this.research = new Set(); this.goalsDone = new Set();
     this.stats = { trained: 0, hunted: 0, collected: { food: 0, wood: 0, stone: 0, gold: 0 }, answered: 0, correct: 0 };
@@ -306,7 +311,16 @@ export class Game {
     if (kind === 'tree') model = makeTree(rnd);
     else if (kind === 'stone' || kind === 'gold') model = makeRock(kind, rnd);
     else if (kind === 'berry') model = makeBerryBush(rnd);
-    else model = makeCarcass();
+    else {
+      // a deer lying on its side
+      const q = makeDeer(rnd);
+      q.root.rotation.x = Math.PI / 2;
+      q.root.position.set(0, 0.15, -0.5 * q.root.scale.x);
+      q.legs.forEach((l, k) => (l.hip.rotation.z = (k % 2 ? 0.3 : -0.3)));
+      q.neck.rotation.z = -0.3;
+      model = new THREE.Group();
+      model.add(q.root);
+    }
     const x = tileToWorld(i), z = tileToWorld(j);
     model.position.set(x + (rnd() - 0.5) * 0.2, this.terrain.heightAt(x, z), z + (rnd() - 0.5) * 0.2);
     if (kind === 'carcass') model.rotation.y = rnd() * 6;
@@ -316,7 +330,8 @@ export class Game {
     this.nodes.set(n.id, n);
     if (kind !== 'carcass') {
       this.nodeAt.set(j * MAP + i, n.id);
-      this.grid.set(i, j, true);
+      // people can walk between trees in a forest; rocks and bushes are in the way
+      this.grid.set(i, j, kind !== 'tree');
     }
     this.updateNodeLook(n);
     return n;
@@ -365,7 +380,7 @@ export class Game {
 
   addBuilding(type: BType, i: number, j: number, built: boolean, id?: number) {
     const def = BUILDINGS[type];
-    const mesh = makeBuilding(type, mulberry32(i * 77 + j));
+    const mesh = makeBuilding(type, mulberry32(i * 77 + j), this.age);
     const cx = tileToWorld(i) - 0.5 + def.size / 2, cz = tileToWorld(j) - 0.5 + def.size / 2;
     let h = 0;
     for (let jj = j; jj < j + def.size; jj++) for (let ii = i; ii < i + def.size; ii++) h = Math.max(h, this.terrain.heightAt(tileToWorld(ii), tileToWorld(jj)));
@@ -418,11 +433,13 @@ export class Game {
   }
 
   addAnimal(x: number, z: number, id?: number) {
-    const mesh = makeDeer();
+    const q = makeDeer();
+    const mesh = q.root;
     const pos = new THREE.Vector3(x, this.terrain.heightAt(x, z), z);
     mesh.position.copy(pos);
+    mesh.rotation.y = Math.random() * Math.PI * 2;
     this.root.add(mesh);
-    const a: Animal = { id: id ?? this.nextId++, pos, target: pos.clone(), home: pos.clone(), mesh, wait: Math.random() * 3, t: Math.random() * 10 };
+    const a: Animal = { id: id ?? this.nextId++, pos, target: pos.clone(), home: pos.clone(), mesh, q, wait: Math.random() * 3, t: Math.random() * 10 };
     this.animals.set(a.id, a);
     return a;
   }
@@ -471,7 +488,7 @@ export class Game {
     let q = 0;
     for (const b of this.buildings.values()) q += b.queue.length;
     let units = 0;
-    for (const u of this.combat.units.values()) if (!u.dying && (u.kind === 'soldier' || u.kind === 'scout')) units++;
+    for (const u of this.combat.units.values()) if (!u.dying && isMine(u.kind)) units++;
     return this.liveVillagers() + units + q;
   }
   canAfford(c: Cost) {
@@ -498,7 +515,7 @@ export class Game {
       return false;
     }
     this.spend(cost);
-    const q = makeQuestion(subject, this.skills, forceLevel);
+    const q = makeQuestion(subject, this.skills, forceLevel, this.age);
     this.paused = true;
     let ok = false;
     try {
@@ -532,7 +549,7 @@ export class Game {
   async startResearch(id: string) {
     const tc = this.townCenter();
     const def = RESEARCH.find((r) => r.id === id);
-    if (!tc || !def || this.research.has(id)) return;
+    if (!tc || !def || this.research.has(id) || (def.age ?? 1) > this.age) return;
     if (tc.research) {
       this.ui.toast('Already researching something. Wait for it to finish.', true);
       return;
@@ -546,11 +563,15 @@ export class Game {
   startPlacement(type: BType) {
     this.cancelPlacement();
     const def = BUILDINGS[type];
+    if ((def.age ?? 1) > this.age) {
+      this.ui.toast(`The ${def.name} comes in the ${AGES[(def.age ?? 1) - 1].name}. Advance at the Town Center!`, true);
+      return;
+    }
     if (!this.canAfford(def.cost)) {
       this.ui.toast(`A ${def.name} needs ${costText(def.cost)}. You need ${this.missing(def.cost)}.`, true);
       return;
     }
-    const ghost = makeGhost(type);
+    const ghost = makeGhost(type, this.age);
     this.root.add(ghost);
     this.placing = { type, ghost, i: 0, j: 0, ok: false };
   }
@@ -673,7 +694,7 @@ export class Game {
     const us = this.selectedUnits();
     // soldiers attack raiders; soldiers and scouts walk where you click
     us.forEach((u, k) => {
-      if (target.kind === 'unit' && target.unit.kind === 'raider' && u.kind === 'soldier') {
+      if (target.kind === 'unit' && target.unit.kind === 'raider' && u.kind !== 'scout') {
         u.order = 'attack';
         u.target = { k: 'unit', id: target.unit.id };
         u.path = [];
@@ -843,6 +864,7 @@ export class Game {
     if (kind === 'tree' && this.research.has('axes')) r *= 1.25;
     if ((kind === 'berry' || kind === 'carcass' || kind === 'farm') && this.research.has('spears')) r *= 1.25;
     if ((kind === 'stone' || kind === 'gold') && this.research.has('picks')) r *= 1.25;
+    if (this.research.has('bronze_tools')) r *= 1.15;
     if (this.res.food <= 0) r *= 0.5;
     return r;
   }
@@ -882,7 +904,7 @@ export class Game {
   private updateVillager(v: Villager, dt: number) {
     if (v.dying || v.hidden) return;
     const hungry = this.res.food <= 0;
-    const speed = VILLAGER_SPEED * (hungry ? 0.75 : 1);
+    const speed = VILLAGER_SPEED * (hungry ? 0.75 : 1) * (this.research.has('wheel') ? 1.15 : 1);
     const moving = this.stepPath(v, dt, speed);
     let anim: VillagerAnim = moving ? 'walk' : 'idle';
     let tool: ToolName | null = null;
@@ -1141,7 +1163,8 @@ export class Game {
     }
     a.pos.y = this.terrain.heightAt(a.pos.x, a.pos.z);
     a.mesh.position.copy(a.pos);
-    animateDeer(a.mesh, moving, !moving, a.t);
+    // deer graze most of the time, but look up when a hunter comes close
+    animateQuad(a.q, moving ? 1.2 : 0, !moving && !hunted && Math.sin(a.t * 0.35 + a.id) > -0.3, dt);
   }
 
   private updateBuildings(dt: number) {
@@ -1150,7 +1173,7 @@ export class Game {
       if (b.queue.length) {
         const q = b.queue[0];
         q.t += dt;
-        if (q.kind === 'soldier' || q.kind === 'scout') {
+        if (q.kind === 'soldier' || q.kind === 'scout' || q.kind === 'archer' || q.kind === 'rider') {
           if (q.t >= this.combat.queueTime(q.kind)) {
             b.queue.shift();
             const ring = this.grid.ringAround(b.i, b.j, b.size, b.i + 1, b.j + 4);
@@ -1162,6 +1185,14 @@ export class Game {
               this.stats.soldiers = (this.stats.soldiers ?? 0) + 1;
               this.markGoal('soldier');
               this.ui.toast('🛡️ A new soldier is ready to protect the town!', true);
+            } else if (q.kind === 'archer') {
+              this.stats.archers = (this.stats.archers ?? 0) + 1;
+              this.markGoal('archer');
+              this.ui.toast('🏹 A new archer is ready!', true);
+            } else if (q.kind === 'rider') {
+              this.stats.riders = (this.stats.riders ?? 0) + 1;
+              this.markGoal('rider');
+              this.ui.toast('🐴 A rider on a fast horse is ready!', true);
             } else {
               this.stats.scouts = (this.stats.scouts ?? 0) + 1;
               this.markGoal('scout');
@@ -1177,6 +1208,14 @@ export class Game {
           if (v) { this.floatText(v.pos, '👋 New villager!'); this.fx.puff(v.pos.clone(), 0xe8dcc4, 10, 0.35); v.cheer = 1.4; }
           this.ui.toast('👋 A new villager is ready to work!', true);
           this.ui.refreshSelection();
+        }
+      }
+      if (b.ageUp) {
+        const next = AGES[this.age];
+        b.ageUp.t += dt;
+        if (next && b.ageUp.t >= next.time) {
+          b.ageUp = null;
+          this.completeAgeUp();
         }
       }
       if (b.research) {
@@ -1206,7 +1245,7 @@ export class Game {
       storehouse: () => count('storehouse') > 0,
       gold: () => this.stats.collected.gold >= 100,
       pop15: () => this.liveVillagers() >= 15,
-      allresearch: () => this.research.size >= RESEARCH.length,
+      allresearch: () => researchFor(1).every((r) => this.research.has(r.id)),
       barracks: () => count('barracks') > 0,
       tower: () => count('tower') > 0,
       soldier: () => (this.stats.soldiers ?? 0) > 0,
@@ -1214,8 +1253,18 @@ export class Game {
       defend: () => (this.stats.raidsDefended ?? 0) > 0,
       sam: () => this.combat.samLevel > 1,
       explore: () => this.fog.fraction() >= 0.5,
+      bronze: () => this.age >= 2,
+      archery: () => count('archery') > 0,
+      stables: () => count('stables') > 0,
+      archer: () => (this.stats.archers ?? 0) > 0,
+      rider: () => (this.stats.riders ?? 0) > 0,
+      bronze_tools: () => this.research.has('bronze_tools'),
+      pop20: () => this.liveVillagers() >= 20,
+      defend3: () => (this.stats.raidsDefended ?? 0) >= 3,
+      sam3: () => this.combat.samLevel >= 3,
+      allbronze: () => researchFor(2).every((r) => this.research.has(r.id)),
     };
-    for (const g of GOALS) if (!this.goalsDone.has(g.id) && checks[g.id]?.()) this.markGoal(g.id);
+    for (const g of GOALS) if ((g.age ?? 1) <= this.age && !this.goalsDone.has(g.id) && checks[g.id]?.()) this.markGoal(g.id);
   }
 
   markGoal(id: string) {
@@ -1340,6 +1389,8 @@ export class Game {
         this.fx.smokeFrom(c.pos);
       }
     }
+    // horses in the stables graze and swish their tails
+    for (const b of this.buildings.values()) for (const h of (b.mesh.userData.horses ?? []) as Quad[]) animateQuad(h, 0, true, dt);
     // farm crops shrink as they are harvested, then grow back
     for (const b of this.buildings.values()) {
       if (b.type !== 'farm' || !b.built) continue;
@@ -1397,6 +1448,64 @@ export class Game {
 
   render() {
     this.fx.render();
+  }
+
+  // ======================= advancing to the next age =======================
+  ageUpBlockers() {
+    const out: string[] = [];
+    const missingResearch = researchFor(this.age).filter((r) => !this.research.has(r.id));
+    if (missingResearch.length) out.push(`Finish the research: ${missingResearch.map((r) => r.name).join(', ')}`);
+    return out;
+  }
+
+  async startAgeUp() {
+    const tc = this.townCenter();
+    const next = AGES[this.age];
+    if (!tc || !next || this.age >= BUILT_AGES) return;
+    if (tc.ageUp) return;
+    const blockers = this.ageUpBlockers();
+    if (blockers.length) { this.ui.toast(`To advance: ${blockers.join('. ')}.`, true); return; }
+    const ok = await this.tryWithQuestion('science', `${next.emoji} Advance to the ${next.name}! ⭐ Boss question`, next.cost, 3);
+    if (ok) {
+      tc.ageUp = { t: 0 };
+      this.ui.toast(`${next.emoji} Your people are getting ready for the ${next.name}!`, true);
+    }
+    this.ui.refreshSelection();
+  }
+
+  private completeAgeUp() {
+    this.age++;
+    const def = AGES[this.age - 1];
+    // questions step up; the level inside the new age starts a little lower so it is not a big jump
+    for (const k of Object.keys(this.skills) as Skill[]) this.skills[k].level = Math.max(1, this.skills[k].level - 1);
+    this.applyAgeLook();
+    const tc = this.townCenter();
+    if (tc) {
+      for (let k = 0; k < 4; k++) setTimeout(() => this.fx.confetti(tc.mesh.position.clone().setY(tc.mesh.position.y + 2 + k)), k * 300);
+      this.fx.puff(tc.mesh.position.clone().setY(tc.mesh.position.y + 0.5), 0xffe9a8, 30, 0.8);
+    }
+    for (const v of this.villagers.values()) if (!v.dying && !v.hidden) v.cheer = 2.5;
+    this.markGoal('bronze');
+    this.ui.toast(`${def.emoji} Welcome to the ${def.name}! New buildings, new research, and harder questions.`, true);
+    this.ui.ageChanged();
+    this.save();
+  }
+
+  /** Rebuild every building with the look of the current age */
+  applyAgeLook() {
+    for (const b of this.buildings.values()) {
+      const old = b.mesh;
+      const mesh = makeBuilding(b.type, mulberry32(b.i * 77 + b.j), this.age);
+      mesh.position.copy(old.position);
+      this.root.remove(old);
+      this.root.add(mesh);
+      b.mesh = mesh;
+      setBuildProgress(mesh, b.progress, b.built);
+      if (b.broken) setBroken(mesh, true);
+      if (b.built) this.fx.puff(mesh.position.clone().setY(mesh.position.y + 0.6), 0xe8dcc4, 10, 0.5);
+    }
+    this.chimneys = [];
+    for (const b of this.buildings.values()) if (b.type === 'house') this.chimneys.push({ b: b.id, pos: this.highestPoint(b.mesh.userData.main) });
   }
 
   // ======================= raids: villagers & buildings =======================
@@ -1697,7 +1806,7 @@ export class Game {
       return s.x >= minX && s.x <= maxX && s.y >= minY && s.y <= maxY;
     };
     const vs = [...this.villagers.values()].filter((v) => !v.hidden && !v.dying && inBox(v.pos));
-    const us = [...this.combat.units.values()].filter((u) => !u.dying && (u.kind === 'soldier' || u.kind === 'scout') && inBox(u.pos));
+    const us = [...this.combat.units.values()].filter((u) => !u.dying && isMine(u.kind) && inBox(u.pos));
     this.setSelected(vs, add, us);
   }
 
@@ -1720,7 +1829,7 @@ export class Game {
     const t = this.pick(cx, cy);
     let text = '';
     const gp = this.groundPoint(cx, cy);
-    if (t.kind === 'unit') text = { soldier: '🛡️ Soldier', scout: '🧭 Scout', raider: '⚔️ Raider! Send soldiers to fight it', sam: '🛡️ General Sam' }[t.unit.kind];
+    if (t.kind === 'unit') text = { soldier: '🛡️ Soldier', scout: '🧭 Scout', archer: '🏹 Archer', rider: '🐴 Rider', raider: '⚔️ Raider! Send soldiers to fight it', sam: '🛡️ General Sam' }[t.unit.kind];
     else if ((t.kind === 'ground' || t.kind === 'none') && gp && !this.fog.isExplored(worldToTile(gp.x), worldToTile(gp.z))) text = '☁️ Unexplored land · send a scout';
     else if (t.kind === 'node') text = `${NODE_LABEL[t.node.kind]} · ${Math.ceil(t.node.amount)} ${RES_ICON[t.node.res]} left`;
     else if (t.kind === 'animal') text = '🦌 Deer · hunt it for food';
@@ -1751,11 +1860,12 @@ export class Game {
         v: 1, seed: this.seed, res: this.res, research: [...this.research], goals: [...this.goalsDone], stats: this.stats, skills: this.skills,
         playTime: this.playTime, nextId: this.nextId, stumps: this.stumps,
         nodes: [...this.nodes.values()].map((n) => [n.id, n.kind, n.i, n.j, Math.round(n.amount * 10) / 10]),
-        buildings: [...this.buildings.values()].map((b) => ({ id: b.id, type: b.type, i: b.i, j: b.j, built: b.built, progress: b.progress, hp: b.hp, queue: b.queue, research: b.research, farmer: b.farmer, broken: b.broken, repairing: b.repairing })),
+        buildings: [...this.buildings.values()].map((b) => ({ id: b.id, type: b.type, i: b.i, j: b.j, built: b.built, progress: b.progress, hp: b.hp, queue: b.queue, research: b.research, farmer: b.farmer, broken: b.broken, repairing: b.repairing, ageUp: b.ageUp ?? null })),
         villagers: [...this.villagers.values()].filter((v) => !v.dying).map((v) => ({ id: v.id, x: v.pos.x, z: v.pos.z, job: v.job, carry: v.carry, task: v.task, hp: v.hp })),
         combat: this.combat.serialize(),
         fog: this.fog.serialize(),
         dayT: this.fx.dayT,
+        age: this.age,
         animals: [...this.animals.values()].map((a) => [a.id, a.pos.x, a.pos.z]),
         camera: [this.rts.target.x, this.rts.target.z, this.rts.wantDist],
       };
@@ -1782,6 +1892,7 @@ export class Game {
     } catch { return false; }
     if (!data || data.v !== 1) return false;
     this.clearWorld();
+    this.age = data.age ?? 1;
     this.setupTerrain(data.seed);
     this.res = data.res;
     this.research = new Set(data.research);
@@ -1792,7 +1903,7 @@ export class Game {
     for (const b of data.buildings) {
       const nb = this.addBuilding(b.type, b.i, b.j, b.built, b.id);
       nb.progress = b.progress; nb.hp = b.hp; nb.queue = b.queue ?? []; nb.research = b.research ?? null; nb.farmer = b.farmer ?? null;
-      nb.broken = !!b.broken; nb.repairing = !!b.repairing;
+      nb.broken = !!b.broken; nb.repairing = !!b.repairing; nb.ageUp = b.ageUp ?? null;
       setBuildProgress(nb.mesh, nb.progress, nb.built);
       if (nb.broken) setBroken(nb.mesh, true);
     }
