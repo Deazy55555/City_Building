@@ -1,0 +1,28 @@
+{
+  "name": "city-building",
+  "version": "1.0.0",
+  "description": "Educational city-building game",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Deazy55555/city_building.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Deazy55555/city_building/issues"
+  },
+  "homepage": "https://github.com/Deazy55555/city_building#readme",
+  "dependencies": {
+    "three": "^0.187.0"
+  },
+  "devDependencies": {
+    "@types/three": "^0.187.0",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.6"
+  },
+  "private": true,
+  "type": "module"
+}
